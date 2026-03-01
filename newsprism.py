@@ -457,7 +457,30 @@ def main():
         </style>
     """, unsafe_allow_html=True)
 
-    st.title("💎 뉴스프리즘 (News Prism) - V9.7 Masterpiece")
+    # ------------------------------------------
+    # 🖼️ [V9.9 Upgrade] 텍스트 이모지 -> PNG 로고 교체 로직
+    # ------------------------------------------
+    LOGO_PATH = "newsprismdog.png"
+    
+    if os.path.exists(LOGO_PATH):
+        import base64
+        with open(LOGO_PATH, "rb") as f:
+            data = base64.b64encode(f.read()).decode("utf-8")
+            # 이미지 높이(height)를 55px로 설정하여 제목 텍스트와 크기를 맞췄습니다.
+            st.markdown(
+                f"""
+                <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 10px;">
+                    <img src="data:image/png;base64,{data}" style="height: 55px; border-radius: 8px;">
+                    <h1 style="margin: 0; padding: 0; line-height: 1.2;">뉴스프리즘 (News Prism) - V9.9 Masterpiece</h1>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+    else:
+        # 파일이 없을 경우 기존 텍스트 타이틀로 백업
+        st.title("💎 뉴스프리즘 (News Prism) - V9.9 Masterpiece")
+        st.info(f"💡 '{LOGO_PATH}' 파일을 찾을 수 없습니다. 이미지를 깃허브에 업로드해 주세요.")
+
     st.markdown("##### 🚀 10대 뉴스 섹션 실시간 로딩 + 📺 유튜브 인사이트 통합 관제 (Triple Engine 복구 완료)")
     st.write("---")
 
@@ -751,3 +774,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
