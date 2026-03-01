@@ -550,7 +550,7 @@ def main():
 
     st.sidebar.markdown("---")
 
-    st.sidebar.header("📺 유튜브 프리즘 (영상)")
+    st.sidebar.header("📺 유튜브 배달")
     yt_channels = {
         "오선의 미국증시 라이브": "UC_JJ_NhRqPKcIOj5Ko3W_3w",
         "이효석 아카데미":        "UCxvdCnvGODDyuvnELnLkQWw",
@@ -774,6 +774,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
