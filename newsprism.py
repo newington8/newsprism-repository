@@ -471,7 +471,7 @@ def main():
                 f"""
                 <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 10px;">
                     <img src="data:image/png;base64,{data}" style="height: 200px; border-radius: 8px;">
-                    <h1 style="margin: 0; padding: 0; line-height: 1.2;"> 가나디: 신문배달 와써여 - V9.9 Masterpiece</h1>
+                    <h1 style="margin: 0; padding: 0; line-height: 1.2;"> 가나디: 신문배달 와써여~~ - V9.9 Masterpiece</h1>
                 </div>
                 """,
                 unsafe_allow_html=True
@@ -481,7 +481,7 @@ def main():
         st.title("💎 가나디의 신문배달 - V9.9 Masterpiece")
         st.info(f"💡 '{LOGO_PATH}' 파일을 찾을 수 없습니다. 이미지를 깃허브에 업로드해 주세요.")
 
-    st.markdown("##### 🚀\ntop10 섹션 헤드라인 + 📺\n유튜브 주요 채널들 ")
+    st.markdown("##### 🚀top10 섹션 헤드라인 + 📺유튜브 주요채널들 ")
     st.write("---")
 
     # ==========================================
@@ -541,7 +541,7 @@ def main():
 
     col_run, col_stop = st.sidebar.columns(2)
     # ✅ FIX #1: width="stretch" → use_container_width=True (전체 동일하게 적용)
-    run_news_btn = col_run.button("🚀\n뉴스 가동", type="primary", use_container_width=True)
+    run_news_btn = col_run.button("🚀뉴스 가동", type="primary", use_container_width=True)
     stop_news_btn = col_stop.button("🛑 정지", use_container_width=True)
 
     if stop_news_btn:
@@ -668,12 +668,12 @@ def main():
         else:
             col1, col2 = st.columns([1, 1])
             with col1:
-                st.markdown("### 📋 오늘의 텍스트 브리핑 (완료)")
-                st.success("🎯 기사 우측의 [내용보기] 버튼을 누르면 통계 중심 요약창이 뜹니다.")
+                st.markdown("### 📋 가나디의 뉴스가져오기 완료!!")
+                st.success("우측의 [내용보기] 버튼을 누르면 요약창이 뜹니다.")
                 if st.session_state.get('final_time_str'):
                     st.markdown(f"**⏱️ 브리핑 조립 소요 시간:** `{st.session_state.final_time_str}`")
 
-                st.markdown(f"**개장전★주요이슈 점검 ({datetime.now().strftime('%Y/%m/%d')})**")
+                st.markdown(f"**개장전★주요이슈 점검 Updated at ({datetime.now().strftime('%Y/%m/%d')})**")
 
                 st.markdown("**[시장 지표]**")
                 for k, v in st.session_state.market_data.items():
@@ -707,7 +707,7 @@ def main():
                     st.write("")
 
             with col2:
-                st.markdown("### 🤖 통계 & 데이터 기반 3문단 요약")
+                st.markdown("### 뉴스내용 간단히 요약")
                 if st.session_state.selected_id and st.session_state.selected_id in st.session_state.news_map:
                     selected_info = st.session_state.news_map[st.session_state.selected_id]
                     title   = selected_info['title']
@@ -719,7 +719,7 @@ def main():
                     st.markdown("---")
 
                     if st.session_state.selected_id not in st.session_state.summaries:
-                        with st.spinner("헤드라인에서 숫자와 통계를 뽑아내어 3문단 요약 중입니다..."):
+                        with st.spinner("헤드라인에서 숫자와 통계를 뽑아내어 요약 중입니다..."):
                             summary_text = generate_headline_data_summary(title, snippet)
                             st.session_state.summaries[st.session_state.selected_id] = summary_text
 
@@ -729,7 +729,7 @@ def main():
                     st.markdown('''
                         <div style="padding: 2rem; background-color: #f8f9fa; border-radius: 10px; text-align: center; color: #6c757d;">
                             👈 왼쪽 브리핑 보드에서 <b>[내용보기]</b> 버튼을 클릭해 보세요.<br>
-                            Gemini가 <b>"통계", "인용구", "숫자", "데이터"</b>를 포함하여 3문단으로 요약해 드립니다!
+                            Gemini가 <b>"통계", "인용구", "숫자", "데이터"</b>를 포함하여 요약해 드립니다!
                         </div>
                     ''', unsafe_allow_html=True)
 
@@ -774,6 +774,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
