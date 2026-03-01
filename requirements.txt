@@ -1,0 +1,7 @@
+streamlit
+gnews
+google-genai
+yfinance
+requests
+pytz
+yt-dlp
