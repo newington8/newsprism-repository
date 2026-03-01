@@ -470,7 +470,7 @@ def main():
             st.markdown(
                 f"""
                 <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 10px;">
-                    <img src="data:image/png;base64,{data}" style="height: 300px; border-radius: 8px;">
+                    <img src="data:image/png;base64,{data}" style="height: 200px; border-radius: 8px;">
                     <h1 style="margin: 0; padding: 0; line-height: 1.2;">뉴스프리즘 (News Prism) - V9.9 Masterpiece</h1>
                 </div>
                 """,
@@ -774,6 +774,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
