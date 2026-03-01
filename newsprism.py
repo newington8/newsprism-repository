@@ -471,17 +471,17 @@ def main():
                 f"""
                 <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 10px;">
                     <img src="data:image/png;base64,{data}" style="height: 200px; border-radius: 8px;">
-                    <h1 style="margin: 0; padding: 0; line-height: 1.2;">뉴스프리즘 (News Prism) - V9.9 Masterpiece</h1>
+                    <h1 style="margin: 0; padding: 0; line-height: 1.2;"> 가나디: 신문배달 와써여 - V9.9 Masterpiece</h1>
                 </div>
                 """,
                 unsafe_allow_html=True
             )
     else:
         # 파일이 없을 경우 기존 텍스트 타이틀로 백업
-        st.title("💎 뉴스프리즘 (News Prism) - V9.9 Masterpiece")
+        st.title("💎 가나디의 신문배달 - V9.9 Masterpiece")
         st.info(f"💡 '{LOGO_PATH}' 파일을 찾을 수 없습니다. 이미지를 깃허브에 업로드해 주세요.")
 
-    st.markdown("##### 🚀 10대 뉴스 섹션 실시간 로딩 + 📺 유튜브 인사이트 통합 관제 (Triple Engine 복구 완료)")
+    st.markdown("##### 🚀 top10 섹션 헤드라인 + 📺 유튜브 주요 채널들 ")
     st.write("---")
 
     # ==========================================
@@ -512,14 +512,14 @@ def main():
     # ==========================================
     # ⚙️ 사이드바 제어판
     # ==========================================
-    st.sidebar.header("⚙️ 텍스트 프리즘 (뉴스)")
+    st.sidebar.header("⚙️ 고급 설정")
     user_interest = st.sidebar.text_area(
-        "나의 초개인화 기준",
+        "커스터마이징 기본값",
         value="거시 경제 흐름, 미국 증시, 그리고 AI와 반도체 산업 변화에 특히 관심이 많음.",
         height=100
     )
 
-    with st.sidebar.expander("🎯 10대 섹션별 집중 타겟팅 (선택)", expanded=False):
+    with st.sidebar.expander("🎯 10대 섹션별 키워드 타겟팅", expanded=False):
         t1  = st.text_input("① 국내 대장주",    placeholder="예: LG에너지솔루션")
         t2  = st.text_input("② 글로벌 빅테크",  placeholder="예: 메타")
         t3  = st.text_input("③ 기업 실적·공시", placeholder="예: 배당락")
@@ -541,7 +541,7 @@ def main():
 
     col_run, col_stop = st.sidebar.columns(2)
     # ✅ FIX #1: width="stretch" → use_container_width=True (전체 동일하게 적용)
-    run_news_btn = col_run.button("🚀 뉴스 가동", type="primary", use_container_width=True)
+    run_news_btn = col_run.button("🚀/n뉴스 가동", type="primary", use_container_width=True)
     stop_news_btn = col_stop.button("🛑 정지", use_container_width=True)
 
     if stop_news_btn:
@@ -774,6 +774,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
