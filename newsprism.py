@@ -481,7 +481,7 @@ def main():
         st.title("💎 가나디의 신문배달 - V9.9 Masterpiece")
         st.info(f"💡 '{LOGO_PATH}' 파일을 찾을 수 없습니다. 이미지를 깃허브에 업로드해 주세요.")
 
-    st.markdown("##### 🚀 top10 섹션 헤드라인 + 📺 유튜브 주요 채널들 ")
+    st.markdown("##### 🚀\ntop10 섹션 헤드라인 + 📺\n유튜브 주요 채널들 ")
     st.write("---")
 
     # ==========================================
@@ -541,7 +541,7 @@ def main():
 
     col_run, col_stop = st.sidebar.columns(2)
     # ✅ FIX #1: width="stretch" → use_container_width=True (전체 동일하게 적용)
-    run_news_btn = col_run.button("🚀/n뉴스 가동", type="primary", use_container_width=True)
+    run_news_btn = col_run.button("🚀\n뉴스 가동", type="primary", use_container_width=True)
     stop_news_btn = col_stop.button("🛑 정지", use_container_width=True)
 
     if stop_news_btn:
@@ -774,6 +774,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
