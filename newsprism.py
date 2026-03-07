@@ -17,6 +17,14 @@ import ast
 # 📌 [보안 강화] API 키 환경변수 / st.secrets 우선 로드
 # ==========================================
 # ✅ FIX #7: API 키 하드코딩 제거 → 환경변수 또는 Streamlit secrets 사용
+# 사용법: .streamlit/secrets.toml 파일에 키를 저장하거나 환경변수로 주입하세요.
+# 예시 secrets.toml:
+#   GEMINI_API_KEY = "실제_키_입력"
+#   NAVER_CLIENT_ID = "실제_키_입력"
+#   NAVER_CLIENT_SECRET = "실제_키_입력"
+#   NEWS_API_KEY = "실제_키_입력"
+#   YOUTUBE_API_KEY = "실제_키_입력"
+
 def _get_secret(key: str, fallback: str = "") -> str:
     """환경변수 → st.secrets → fallback 순으로 키를 로드합니다."""
     val = os.environ.get(key, "")
@@ -33,14 +41,14 @@ NAVER_CLIENT_ID      = _get_secret("NAVER_CLIENT_ID",      "")
 NAVER_CLIENT_SECRET  = _get_secret("NAVER_CLIENT_SECRET",  "")
 NEWS_API_KEY         = _get_secret("NEWS_API_KEY",         "")
 YOUTUBE_API_KEY      = _get_secret("YOUTUBE_API_KEY",      "")
-# 🚀 Alpha Vantage 유료 API 키 (Step 2를 위한 준비)
+# 🚀 Alpha Vantage 유료 API 키 로드
 ALPHAVANTAGE_API_KEY = _get_secret("ALPHAVANTAGE_API_KEY", "")
 
 # 초고속 gemini-2.5-flash 단일 엔진
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ==========================================
-# 📌 [V10.0] 멀티 탭 지원 독립 캐시 시스템
+# 📌 캐시(백업) 시스템 (V10.0 독립 서랍 구조로 업그레이드)
 # ==========================================
 CACHE_FILE = "prism_cache_v10.json"
 
@@ -61,16 +69,18 @@ def load_session_from_disk():
         if os.path.exists(CACHE_FILE):
             with open(CACHE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                return (data.get("market", {}), 
-                        data.get("news_data", {"results": {}, "map": {}, "summaries": {}}),
-                        data.get("alpha_data", {"results": {}, "map": {}, "summaries": {}}),
-                        data.get("yt_data", {"channel_name": "", "videos": []}))
+                return (
+                    data.get("market", {}), 
+                    data.get("news_data", {"results": {}, "map": {}, "summaries": {}}),
+                    data.get("alpha_data", {"results": {}, "map": {}, "summaries": {}}),
+                    data.get("yt_data", {"channel_name": "", "videos": [], "summaries": {}})
+                )
     except Exception as e:
         print(f"[Error] 캐시 로드 실패: {e}")
-    return {}, {"results": {}, "map": {}, "summaries": {}}, {"results": {}, "map": {}, "summaries": {}}, {"channel_name": "", "videos": []}
+    return {}, {"results": {}, "map": {}, "summaries": {}}, {"results": {}, "map": {}, "summaries": {}}, {"channel_name": "", "videos": [], "summaries": {}}
 
 # ==========================================
-# 📌 뉴스 엔진 및 유틸리티 로직 (V9.9 100% 원상복구)
+# 📌 뉴스 엔진 및 유틸리티 로직
 # ==========================================
 def sanitize_text(text):
     if not text:
@@ -324,6 +334,67 @@ def generate_headline_data_summary(title, snippet):
         return f"요약 생성 중 오류 발생: {e}"
 
 # ==========================================
+# 📈 [NEW] Alpha Vantage 프리미엄 통신 로직
+# ==========================================
+def fetch_alpha_vantage_news(sector_name, start_idx):
+    if not ALPHAVANTAGE_API_KEY:
+        return "", {}, start_idx
+
+    # Alpha Vantage 전용 토픽 매핑
+    topic_map = {
+        "글로벌 빅테크": "technology",
+        "기업 실적·공시": "earnings",
+        "거시경제 지표": "economy_macro",
+        "해외 증시·자산": "financial_markets",
+        "정부 정책·규제": "economy_fiscal",
+        "글로벌 지정학": "economy_politics"
+    }
+    
+    topic = topic_map.get(sector_name)
+    if not topic: 
+        return "", {}, start_idx # 매핑되지 않은 섹션은 패스
+
+    time_from = (datetime.now(pytz.UTC) - timedelta(hours=15)).strftime("%Y%m%dT%H%M")
+    url = "https://www.alphavantage.co/query"
+    params = {
+        "function": "NEWS_SENTIMENT",
+        "topics": topic,
+        "time_from": time_from,
+        "limit": 30,
+        "apikey": ALPHAVANTAGE_API_KEY
+    }
+
+    news_map = {}
+    context_list = []
+    idx = start_idx
+    
+    try:
+        res = requests.get(url, params=params)
+        if res.status_code == 200:
+            data = res.json()
+            if "Information" in data or "Note" in data:
+                print(f"[Alpha Vantage] API Limit Reached: {data}")
+                return "", {}, start_idx
+
+            feed = data.get("feed", [])
+            for item in feed:
+                sentiment = item.get("overall_sentiment_label", "Neutral")
+                # 감성 라벨 부착 [Bullish], [Bearish] 등
+                clean_title = f"[{sentiment}] {sanitize_text(item.get('title', ''))}"
+                n_id = f"A{idx}"
+                news_map[n_id] = {
+                    "url": item.get('url', ''), 
+                    "title": clean_title, 
+                    "snippet": sanitize_text(item.get('summary', ''))
+                }
+                context_list.append(f"[ID:{n_id}] {clean_title}")
+                idx += 1
+    except Exception as e:
+        print(f"[Error] Alpha Vantage 통신 실패: {e}")
+        
+    return "\n".join(context_list), news_map, idx
+
+# ==========================================
 # 📺 yt-dlp 기반 유튜브 엔진
 # ==========================================
 def fetch_youtube_videos_15h(channel_id):
@@ -384,7 +455,7 @@ def extract_transcript_and_summarize(video_id, title, description):
         elif auto_subs and 'en' in auto_subs:     target_sub = auto_subs['en']
 
         if target_sub:
-            # ✅ FIX #6: next()에 기본값 None 적용 + target_sub 빈 리스트 방어 처리
+            # ✅ FIX #6: next()에 기본값 None 적용 + target_sub 빈 리스트 방어 처리 (원상복구 완)
             json3_url = next((fmt['url'] for fmt in target_sub if fmt.get('ext') == 'json3'), None)
             if not json3_url and target_sub:
                 json3_url = target_sub[0].get('url')
@@ -396,6 +467,7 @@ def extract_transcript_and_summarize(video_id, title, description):
                         data = sub_resp.json()
                         events = data.get('events', [])
                         texts = []
+                        # [원상복구 완료] 강제 축약된 컴프리헨션을 오리지널 for loop 구조로 100% 되돌림
                         for event in events:
                             if 'segs' in event:
                                 for seg in event['segs']:
@@ -431,6 +503,303 @@ def extract_transcript_and_summarize(video_id, title, description):
         print(f"[Error] 유튜브 AI 영상 요약 실패: {e}")
         return "AI 요약 중 오류가 발생했습니다."
 
+# ==========================================
+# 🧱 [V10.0] 진정한 비동기 프래그먼트(Fragments) 렌더링 부대
+# ==========================================
+
+@st.fragment
+def render_tab_news_fragment(target_keywords, user_interest, default_keywords):
+    """일반 뉴스 수집 및 렌더링을 담당하는 완전히 독립된 구역"""
+    col_run, col_stop = st.columns(2)
+    # 버튼이 프래그먼트 내부에 위치해야 해당 탭만 리렌더링 됩니다.
+    if col_run.button("🚀 뉴스 가동", type="primary", use_container_width=True, key="btn_run_general_news"):
+        st.session_state.news_data = {"results": {}, "map": {}, "summaries": {}}
+        st.session_state.selected_news_id = None
+        start_time = time.time()
+
+        # [원상복구 완료] JS 기반 실시간 타이머 완벽 복원
+        timer_placeholder = st.empty()
+        with timer_placeholder:
+            components.html(
+                """
+                <div style="font-family: 'Segoe UI', sans-serif; font-size: 16px; font-weight: 500; color: #0f5132; background-color: #d1e7dd; padding: 20px; border-radius: 8px; border: 1px solid #badbcc; text-align: center; margin-bottom: 10px;">
+                    🚀 <b>뉴스프리즘 엔진 순차 렌더링 가동 중...</b> <br><br>
+                    ⏱️ 소요시간: <span id="time" style="font-weight: 700; font-size: 20px;">00분 00초</span>
+                </div>
+                <script>
+                    var start = Date.now();
+                    setInterval(function() {
+                        var delta = Math.floor((Date.now() - start) / 1000);
+                        var m = Math.floor(delta / 60).toString().padStart(2, '0');
+                        var s = (delta % 60).toString().padStart(2, '0');
+                        document.getElementById('time').innerText = m + '분 ' + s + '초';
+                    }, 1000);
+                </script>
+                """, height=120
+            )
+
+        ui_status_text = st.empty()
+        ui_progress_bar = st.progress(0) # [원상복구 완료] 진행률 바
+
+        st.markdown("### 📋 오늘의 텍스트 브리핑 (실시간 로딩 중... ⏳)")
+        market_ph = st.empty()
+        market_ph.info("📈 글로벌 마켓 지표를 스캔하고 있습니다...")
+
+        # 0. 시장 지표 스캔
+        st.session_state.market_data = get_market_indicators()
+        market_str = " | ".join([f"{k}: {v}" for k, v in st.session_state.market_data.items()])
+        market_ph.success(f"**[시장 지표]** {market_str}")
+
+        sectors_keys = list(target_keywords.keys())
+        sector_containers = {sec: st.empty() for sec in sectors_keys}
+        
+        # ✅ FIX #4: current_article_idx는 반드시 버튼 블록 내부에서만 초기화
+        current_article_idx = 1
+        
+        for idx, sector_name in enumerate(sectors_keys):
+            target_kw = target_keywords.get(sector_name, "")
+            search_query = target_kw if target_kw else default_keywords[sector_name]
+            
+            ui_status_text.markdown(f"**🔍 [{sector_name}] 데이터 수집 및 AI 정제 중... ({idx+1}/10)**")
+            ui_progress_bar.progress(int(((idx+1) / 10) * 100))
+            
+            raw_context, local_map, current_article_idx = fetch_single_sector_news(sector_name, search_query, current_article_idx)
+            curated_list = apply_prism_lens_single(sector_name, raw_context, user_interest, search_query)
+            
+            st.session_state.news_data["map"].update(local_map)
+            st.session_state.news_data["results"][sector_name] = curated_list
+
+            with sector_containers[sector_name].container():
+                if curated_list:
+                    st.markdown(f"#### ✅ [{sector_name}]")
+                    for item in curated_list:
+                        title = item.get('title', '제목 없음') if isinstance(item, dict) else item
+                        st.markdown(f"• {title}")
+                    st.write("---")
+
+        elapsed = int(time.time() - start_time)
+        mins, secs = divmod(elapsed, 60)
+        st.session_state.final_time_str = f"{mins:02d}분 {secs:02d}초"
+
+        ui_progress_bar.progress(100)
+        ui_status_text.markdown("✨ **모든 브리핑 조립이 완료되었습니다!**")
+        timer_placeholder.empty()
+
+        save_session_to_disk(st.session_state.market_data, st.session_state.news_data, st.session_state.alpha_data, st.session_state.yt_data)
+
+    if col_stop.button("🛑 정지", use_container_width=True, key="btn_stop_general_news"):
+        st.error("🚫 브리핑 가동이 취소되었습니다.")
+        st.stop()
+
+    # --- 화면 렌더링 뷰어 파트 ---
+    if not st.session_state.news_data["results"]:
+        st.info("👆 위쪽의 '🚀 뉴스 가동' 버튼을 눌러주세요.")
+    else:
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            st.markdown("### 📋 가나디의 뉴스가져오기 완료!!")
+            st.success("우측의 [내용보기] 버튼을 누르면 요약창이 뜹니다.")
+            # [원상복구 완료] 브리핑 소요 시간 표출 복구
+            if st.session_state.get('final_time_str'):
+                st.markdown(f"**⏱️ 브리핑 조립 소요 시간:** `{st.session_state.final_time_str}`")
+
+            st.markdown(f"**개장전★주요이슈 점검 Updated at ({datetime.now().strftime('%Y/%m/%d')})**")
+
+            st.markdown("**[시장 지표]**")
+            for k, v in st.session_state.market_data.items():
+                st.markdown(f"* {k}: {v}")
+            st.write("---")
+
+            categories_data = st.session_state.news_data["results"]
+            for category, items in categories_data.items():
+                if not items:
+                    continue
+                st.markdown(f"#### [{category}]")
+                for idx, item in enumerate(items):
+                    title = item.get('title', '제목 없음') if isinstance(item, dict) else item
+                    item_id = item.get('id') if isinstance(item, dict) else None
+
+                    if not item_id:
+                        for k, v in st.session_state.news_data["map"].items():
+                            if v['title'] == title or title in v['title']:
+                                item_id = k
+                                break
+                        if not item_id:
+                            item_id = f"fallback_{category}_{idx}"
+
+                    title = re.sub(r'^\[.*?\]\s*', '', title).strip()
+                    
+                    c_text, c_btn = st.columns([8.5, 1.5])
+                    c_text.markdown(f"• {title}")
+                    # ✅ FIX #1 (계속): 내용보기 버튼도 동일하게 수정
+                    if c_btn.button("내용보기", key=f"btn_gen_{category}_{idx}_{item_id}", use_container_width=True):
+                        st.session_state.selected_news_id = item_id
+                st.write("")
+
+        with col2:
+            st.markdown("### 뉴스내용 간단히 요약")
+            if st.session_state.selected_news_id and st.session_state.selected_news_id in st.session_state.news_data["map"]:
+                selected_info = st.session_state.news_data["map"][st.session_state.selected_news_id]
+                title   = selected_info['title']
+                snippet = selected_info['snippet']
+                url     = selected_info['url']
+
+                st.markdown(f"**🔗 [웹 브라우저에서 원본 기사 따로 열기]({url})**")
+                st.markdown(f"**📰 기사 제목:** {title}")
+                st.markdown("---")
+
+                if st.session_state.selected_news_id not in st.session_state.news_data["summaries"]:
+                    with st.spinner("헤드라인에서 숫자와 통계를 뽑아내어 요약 중입니다..."):
+                        summary_text = generate_headline_data_summary(title, snippet)
+                        st.session_state.news_data["summaries"][st.session_state.selected_news_id] = summary_text
+
+                st.info("💡 **헤드라인 기반 데이터 추출 결과**")
+                st.write(st.session_state.news_data["summaries"][st.session_state.selected_news_id])
+            else:
+                st.markdown('''
+                    <div style="padding: 2rem; background-color: #f8f9fa; border-radius: 10px; text-align: center; color: #6c757d;">
+                        👈 왼쪽 브리핑 보드에서 <b>[내용보기]</b> 버튼을 클릭해 보세요.<br>
+                        Gemini가 <b>"통계", "인용구", "숫자", "데이터"</b>를 포함하여 요약해 드립니다!
+                    </div>
+                ''', unsafe_allow_html=True)
+
+
+@st.fragment
+def render_tab_alpha_fragment(target_keywords, user_interest, default_keywords):
+    """Alpha Vantage 유료 뉴스를 수집/렌더링하는 전용 프래그먼트"""
+    if st.button("💎 Alpha Vantage 프리미엄 가동", type="primary", use_container_width=True, key="btn_run_alpha_vantage"):
+        if not ALPHAVANTAGE_API_KEY:
+            st.error("🚨 Alpha Vantage API 키가 등록되지 않았습니다. Secrets를 확인해주세요.")
+            return
+
+        st.session_state.alpha_data = {"results": {}, "map": {}, "summaries": {}}
+        st.session_state.selected_alpha_id = None
+        
+        with st.status("💎 글로벌 경제 감성(Sentiment) 분석 중...", expanded=True) as status:
+            sectors_keys = list(target_keywords.keys())
+            alpha_idx = 1
+            for sector_name in sectors_keys:
+                target_kw = target_keywords.get(sector_name, "")
+                search_query = target_kw if target_kw else default_keywords[sector_name]
+                
+                # 유료 감성 데이터 연결 로직
+                st.write(f"🔍 [{sector_name}] Alpha Sentiment API 스캔 중...")
+                raw_context, local_map, alpha_idx = fetch_alpha_vantage_news(sector_name, alpha_idx)
+                
+                if raw_context:
+                    st.write(f"🧠 [{sector_name}] Gemini 필터링 중...")
+                    curated_list = apply_prism_lens_single(sector_name, raw_context, user_interest, search_query)
+                    st.session_state.alpha_data["map"].update(local_map)
+                    st.session_state.alpha_data["results"][sector_name] = curated_list
+            
+            status.update(label="✨ Alpha Vantage 프리미엄 분석 완료!", state="complete")
+            save_session_to_disk(st.session_state.market_data, st.session_state.news_data, st.session_state.alpha_data, st.session_state.yt_data)
+
+    # --- Alpha Vantage 뷰어 ---
+    if not st.session_state.alpha_data["results"]:
+        st.info("👆 위의 '💎 Alpha Vantage 프리미엄 가동' 버튼을 눌러주세요.")
+    else:
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            st.markdown("### 📈 글로벌 감성(Sentiment) 브리핑")
+            for category, items in st.session_state.alpha_data["results"].items():
+                if not items: 
+                    continue
+                st.markdown(f"#### [{category}]")
+                for idx, item in enumerate(items):
+                    title = item.get('title', '제목 없음') if isinstance(item, dict) else item
+                    item_id = item.get('id') if isinstance(item, dict) else f"fallback_alpha_{idx}"
+                    
+                    # 배지가 포함된 타이틀 출력
+                    c_text, c_btn = st.columns([8.5, 1.5])
+                    c_text.markdown(f"• {title}")
+                    if c_btn.button("심층분석", key=f"btn_alp_{category}_{item_id}", use_container_width=True):
+                        st.session_state.selected_alpha_id = item_id
+                st.write("")
+        
+        with c2:
+            st.markdown("### 🧬 프리미엄 인사이트")
+            sel_id = st.session_state.get('selected_alpha_id')
+            if sel_id and sel_id in st.session_state.alpha_data["map"]:
+                info = st.session_state.alpha_data["map"][sel_id]
+                st.markdown(f"**🔗 [외신 원문 기사 열기]({info['url']})**")
+                st.markdown(f"**📰 기사 제목:** {info['title']}")
+                st.markdown("---")
+                if sel_id not in st.session_state.alpha_data["summaries"]:
+                    with st.spinner("프리미엄 데이터 요약 중..."):
+                        st.session_state.alpha_data["summaries"][sel_id] = generate_headline_data_summary(info['title'], info['snippet'])
+                st.success(st.session_state.alpha_data["summaries"][sel_id])
+            else:
+                st.markdown('''
+                    <div style="padding: 2rem; background-color: #e2e3e5; border-radius: 10px; text-align: center; color: #383d41;">
+                        👈 왼쪽 브리핑 보드에서 <b>[심층분석]</b> 버튼을 클릭하세요.
+                    </div>
+                ''', unsafe_allow_html=True)
+
+
+@st.fragment
+def render_tab_youtube_fragment():
+    """유튜브 검색 및 요약을 담당하는 전용 프래그먼트"""
+    yt_channels = {
+        "오선의 미국증시 라이브": "UC_JJ_NhRqPKcIOj5Ko3W_3w",
+        "이효석 아카데미":        "UCxvdCnvGODDyuvnELnLkQWw",
+        "내일은 투자왕 김단테":   "UCKTMvIu9a4VGSrpWy-8bUrQ",
+        "센서스튜디오":           "UC6dN6Rilzh9KmzymxnZGslg"
+    }
+
+    st.markdown("##### 📺 분석하고 싶은 채널을 선택하세요")
+    # [원상복구 완료] 오리지널 코드처럼 글자 깨짐 방지를 위해 버튼을 세로로 나열 (columns 사용 안함)
+    for ch_name, ch_id in yt_channels.items():
+        if st.button(f"▶️ {ch_name}", use_container_width=True, key=f"yt_ch_btn_{ch_id}"):
+            with st.spinner(f"📡 '{ch_name}' 채널의 최근 15시간 영상을 스캔합니다..."):
+                st.session_state.yt_data["videos"] = fetch_youtube_videos_15h(ch_id)
+                st.session_state.yt_data["channel_name"] = ch_name
+                save_session_to_disk(st.session_state.market_data, st.session_state.news_data, st.session_state.alpha_data, st.session_state.yt_data)
+
+    st.write("---")
+    
+    if not st.session_state.yt_data["videos"]:
+        st.info("👆 위의 채널 버튼을 클릭하여 영상을 불러오세요.")
+    else:
+        st.markdown(f"### 📺 **{st.session_state.yt_data.get('channel_name', '')}** - 최근 15시간 업로드 영상")
+        for item in st.session_state.yt_data["videos"]:
+            # ✅ FIX #5: videoId 안전하게 추출 → KeyError 방지
+            video_id = item.get('id', {}).get('videoId')
+            if not video_id: 
+                continue
+
+            snippet      = item['snippet']
+            title        = sanitize_text(snippet['title'])
+            published_at = snippet['publishedAt']
+            thumb_url    = snippet['thumbnails']['high']['url']
+            video_url    = f"https://www.youtube.com/watch?v={video_id}"
+
+            dt = datetime.strptime(published_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=pytz.UTC).astimezone(pytz.timezone('Asia/Seoul'))
+            pretty_time = dt.strftime("%Y년 %m월 %d일 %H시 %M분")
+            
+            with st.container():
+                col_img, col_info = st.columns([3, 7])
+                
+                with col_img:
+                    st.image(thumb_url)
+                
+                with col_info:
+                    st.markdown(f"#### [{title}]({video_url})")
+                    st.markdown(f"🗓️ **업로드:** {pretty_time}")
+
+                    # ✅ FIX #1 (계속): 유튜브 요약 버튼도 동일하게 수정
+                    if st.button("🧠 영상 내용 프리즘 요약하기", key=f"yt_sum_btn_{video_id}", use_container_width=True):
+                        with st.spinner("뉴스프리즘 엔진이 유튜브 데이터를 해독 중입니다. (약 5~10초 소요)"):
+                            summary = extract_transcript_and_summarize(video_id, title, snippet['description'])
+                            st.session_state.yt_data["summaries"][video_id] = summary
+                            save_session_to_disk(st.session_state.market_data, st.session_state.news_data, st.session_state.alpha_data, st.session_state.yt_data)
+                    
+                    # 요약이 존재하면 바로 출력 (프래그먼트 새로고침 시 데이터 유지)
+                    if video_id in st.session_state.yt_data.get("summaries", {}):
+                        st.success("🎯 **AI 영상 핵심 요약 완료!**")
+                        st.write(st.session_state.yt_data["summaries"][video_id])
+            st.write("---")
+
 
 # ==========================================
 # 📌 메인 앱 렌더링
@@ -438,7 +807,7 @@ def extract_transcript_and_summarize(video_id, title, description):
 def main():
     st.set_page_config(page_title="News Prism V10.0", page_icon="💎", layout="wide")
 
-    # [원상복구] CSS 속성 100% 복구 (탭 구조 내부에서도 Sticky 적용 유지)
+    # [원상복구 완료] 탭 구조 내부에서도 Sticky 적용이 유지되도록 CSS 완벽 복구
     st.markdown("""
         <style>
             .main, .main .block-container { overflow: visible !important; }
@@ -460,7 +829,6 @@ def main():
     # 🖼️ [V9.9 Upgrade] 텍스트 이모지 -> PNG 로고 교체 로직 (원상복구)
     # ------------------------------------------
     LOGO_PATH = "newsprismdog.png"
-    
     if os.path.exists(LOGO_PATH):
         import base64
         with open(LOGO_PATH, "rb") as f:
@@ -469,50 +837,39 @@ def main():
                 f"""
                 <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 10px;">
                     <img src="data:image/png;base64,{data}" style="height: 200px; border-radius: 8px;">
-                    <h1 style="margin: 0; padding: 0; line-height: 1.2;"> 가나디: 신문배달 와써여~~ - V10.0 (Step 1)</h1>
+                    <h1 style="margin: 0; padding: 0; line-height: 1.2;"> 가나디: 신문배달 와써여~~ - V10.0 Masterpiece</h1>
                 </div>
-                """,
-                unsafe_allow_html=True
+                """, unsafe_allow_html=True
             )
     else:
-        st.title("💎 가나디의 신문배달 - V10.0 (Step 1)")
+        st.title("💎 가나디의 신문배달 - V10.0 Masterpiece")
         st.info(f"💡 '{LOGO_PATH}' 파일을 찾을 수 없습니다. 이미지를 깃허브에 업로드해 주세요.")
 
-    st.markdown("##### 🚀top10 섹션 헤드라인 + 📺유튜브 주요채널들 ")
+    st.markdown("##### 🚀top10 섹션 헤드라인 + 📺유튜브 주요채널들")
     st.write("---")
 
     # ==========================================
-    # ⚙️ [V10.0] 상태 관리 (독립 서랍 구조)
+    # ⚙️ [V10.0] 상태 관리 (독립 서랍 구조 완벽 로드)
     # ==========================================
     m_data, n_data, a_data, y_data = load_session_from_disk()
-    
-    # 1. 사이드바 명령 신호 (Command Flags)
-    if 'cmd_run_news' not in st.session_state: st.session_state.cmd_run_news = False
-    if 'cmd_run_alpha' not in st.session_state: st.session_state.cmd_run_alpha = False
-    if 'cmd_run_yt' not in st.session_state: st.session_state.cmd_run_yt = False
-    if 'cmd_yt_channel_id' not in st.session_state: st.session_state.cmd_yt_channel_id = ""
-
-    # 2. 독립 데이터 저장소
     if 'market_data' not in st.session_state: st.session_state.market_data = m_data
     if 'news_data' not in st.session_state: st.session_state.news_data = n_data
     if 'alpha_data' not in st.session_state: st.session_state.alpha_data = a_data
     if 'yt_data' not in st.session_state: st.session_state.yt_data = y_data
 
-    # UI 상태 저장소
-    if 'selected_news_id' not in st.session_state: st.session_state.selected_news_id = None
-    if 'final_time_str' not in st.session_state: st.session_state.final_time_str = None
-
     # ==========================================
-    # ⚙️ 사이드바 제어판
+    # ⚙️ 사이드바 제어판 (통제실 역할로 전환)
     # ==========================================
     st.sidebar.header("⚙️ 고급 설정")
+    st.sidebar.info("💡 V10.0 업데이트: 사이드바의 가동 버튼들이 각 탭 내부로 이사했습니다! 탭을 넘나들며 동시에 여러 기능을 실행해 보세요.")
+    
     user_interest = st.sidebar.text_area(
         "커스터마이징 기본값",
         value="거시 경제 흐름, 미국 증시, 그리고 AI와 반도체 산업 변화에 특히 관심이 많음.",
         height=100
     )
 
-    # [원상복구] 10대 섹션별 키워드 타겟팅 입력창 전체 복구
+    # [원상복구 완료] 10대 섹션별 키워드 타겟팅 입력창 전체 복원
     with st.sidebar.expander("🎯 10대 섹션별 키워드 타겟팅", expanded=False):
         t1  = st.text_input("① 국내 대장주",    placeholder="예: LG에너지솔루션")
         t2  = st.text_input("② 글로벌 빅테크",  placeholder="예: 메타")
@@ -526,287 +883,39 @@ def main():
         t10 = st.text_input("⑩ 글로벌 지정학",  placeholder="예: 이스라엘")
 
     target_keywords = {
-        "국내 대장주":   t1.strip(),  "글로벌 빅테크":  t2.strip(),
-        "기업 실적·공시": t3.strip(), "미래 첨단산업":  t4.strip(),
-        "거시경제 지표":  t5.strip(), "부동산·원자재":  t6.strip(),
-        "국내 증시·시황": t7.strip(), "해외 증시·자산": t8.strip(),
-        "정부 정책·규제": t9.strip(), "글로벌 지정학":  t10.strip()
+        "국내 대장주": t1.strip(), "글로벌 빅테크": t2.strip(), "기업 실적·공시": t3.strip(),
+        "미래 첨단산업": t4.strip(), "거시경제 지표": t5.strip(), "부동산·원자재": t6.strip(),
+        "국내 증시·시황": t7.strip(), "해외 증시·자산": t8.strip(), "정부 정책·규제": t9.strip(),
+        "글로벌 지정학": t10.strip()
     }
 
-    col_run, col_stop = st.sidebar.columns(2)
-    # ✅ FIX #1: width="stretch" → use_container_width=True (전체 동일하게 적용)
-    if col_run.button("🚀뉴스 가동", type="primary", use_container_width=True):
-        st.session_state.cmd_run_news = True
-
-    if col_stop.button("🛑 정지", use_container_width=True):
-        st.sidebar.error("🚫 브리핑 가동이 취소되었습니다.")
-        st.stop()
-
-    st.sidebar.markdown("---")
-
-    # [V10.0 추가] Alpha Vantage 버튼
-    st.sidebar.header("📈 프리미엄 데이터 (유료)")
-    if st.sidebar.button("💎 Alpha Vantage 가동", use_container_width=True):
-        st.session_state.cmd_run_alpha = True
-
-    st.sidebar.markdown("---")
-
-    st.sidebar.header("📺 유튜브 배달")
-    yt_channels = {
-        "오선의 미국증시 라이브": "UC_JJ_NhRqPKcIOj5Ko3W_3w",
-        "이효석 아카데미":        "UCxvdCnvGODDyuvnELnLkQWw",
-        "내일은 투자왕 김단테":   "UCKTMvIu9a4VGSrpWy-8bUrQ",
-        "센서스튜디오":           "UC6dN6Rilzh9KmzymxnZGslg"
+    default_keywords = {
+        "국내 대장주":   "삼성전자 OR SK하이닉스 OR 현대차 OR 에코프로 OR 금융주",
+        "글로벌 빅테크":  "엔비디아 OR 애플 OR 테슬라 OR 마이크로소프트 OR TSMC",
+        "기업 실적·공시": "어닝 OR 실적발표 OR 주주환원 OR M&A OR 자사주",
+        "미래 첨단산업":  "AI OR 반도체 OR 2차전지 OR 자율주행 OR 로봇",
+        "거시경제 지표":  "기준금리 OR 인플레이션 OR 환율 OR CPI OR 고용지표",
+        "부동산·원자재":  "부동산 시장 OR PF OR 국제유가 OR 금 가격 OR 원자재",
+        "국내 증시·시황": "코스피 OR 코스닥 OR 상법개정 OR 수급 OR 환율",
+        "해외 증시·자산": "나스닥 OR S&P500 OR 연준 OR 국채 OR 비트코인",
+        "정부 정책·규제": "상법개정 OR 정부 정책 OR 세제개편 OR 세제혜택",
+        "글로벌 지정학":  "미중 OR 관세 OR 중동 OR 트럼프 OR 공급망"
     }
-
-    for ch_name, ch_id in yt_channels.items():
-        # ✅ FIX #1 (계속): 유튜브 채널 버튼도 동일하게 수정
-        if st.sidebar.button(f"▶️ {ch_name}", use_container_width=True):
-            st.session_state.cmd_run_yt = True
-            st.session_state.cmd_yt_channel_id = ch_id
-            st.session_state.yt_data["channel_name"] = ch_name
 
     # ==========================================
-    # 🖥️ 3단 독립 탭 (V10.0 레이아웃)
+    # 🖥️ 3단 독립 탭 (V10.0 멀티태스킹 레이아웃)
     # ==========================================
     tab_news, tab_alpha, tab_yt = st.tabs(["📰 일반 뉴스 브리핑", "📈 Alpha Vantage 프리미엄", "📺 유튜브 인사이트"])
 
-    # ------------------------------------------
-    # 탭 1: 일반 뉴스 (V9.9 작동 로직 및 UX 100% 원상복구 탑재)
-    # ------------------------------------------
+    # 각각의 프래그먼트 함수를 호출하여 탭 내부에 렌더링
     with tab_news:
-        if st.session_state.cmd_run_news:
-            st.session_state.news_data = {"results": {}, "map": {}, "summaries": {}}
-            st.session_state.selected_news_id = None
-            start_time = time.time()
+        render_tab_news_fragment(target_keywords, user_interest, default_keywords)
 
-            # [원상복구] JS 기반 실시간 로딩 타이머 복구
-            timer_placeholder = st.empty()
-            with timer_placeholder:
-                components.html(
-                    """
-                    <div style="font-family: 'Segoe UI', sans-serif; font-size: 16px; font-weight: 500; color: #0f5132; background-color: #d1e7dd; padding: 20px; border-radius: 8px; border: 1px solid #badbcc; text-align: center; margin-bottom: 10px;">
-                        🚀 <b>뉴스프리즘 엔진 순차 렌더링 가동 중...</b> <br><br>
-                        ⏱️ 소요시간: <span id="time" style="font-weight: 700; font-size: 20px;">00분 00초</span>
-                    </div>
-                    <script>
-                        var start = Date.now();
-                        setInterval(function() {
-                            var delta = Math.floor((Date.now() - start) / 1000);
-                            var m = Math.floor(delta / 60).toString().padStart(2, '0');
-                            var s = (delta % 60).toString().padStart(2, '0');
-                            document.getElementById('time').innerText = m + '분 ' + s + '초';
-                        }, 1000);
-                    </script>
-                    """, height=120
-                )
-
-            ui_status_text = st.empty()
-            ui_progress_bar = st.progress(0) # [원상복구] 진행률 프로그레스 바 복구
-
-            st.markdown("### 📋 오늘의 텍스트 브리핑 (실시간 로딩 중... ⏳)")
-            market_ph = st.empty()
-            market_ph.info("📈 글로벌 마켓 지표를 스캔하고 있습니다...")
-
-            sectors_keys = list(target_keywords.keys())
-            sector_containers = {sec: st.empty() for sec in sectors_keys}
-
-            # 0. 시장 지표 스캔
-            st.session_state.market_data = get_market_indicators()
-            market_str = " | ".join([f"{k}: {v}" for k, v in st.session_state.market_data.items()])
-            market_ph.success(f"**[시장 지표]** {market_str}")
-
-            # ✅ FIX #4: current_article_idx는 반드시 버튼 블록 내부에서만 초기화 (현재 위치 OK)
-            current_article_idx = 1
-            default_keywords = {
-                "국내 대장주":   "삼성전자 OR SK하이닉스 OR 현대차 OR 에코프로 OR 금융주",
-                "글로벌 빅테크":  "엔비디아 OR 애플 OR 테슬라 OR 마이크로소프트 OR TSMC",
-                "기업 실적·공시": "어닝 OR 실적발표 OR 주주환원 OR M&A OR 자사주",
-                "미래 첨단산업":  "AI OR 반도체 OR 2차전지 OR 자율주행 OR 로봇",
-                "거시경제 지표":  "기준금리 OR 인플레이션 OR 환율 OR CPI OR 고용지표",
-                "부동산·원자재":  "부동산 시장 OR PF OR 국제유가 OR 금 가격 OR 원자재",
-                "국내 증시·시황": "코스피 OR 코스닥 OR 상법개정 OR 수급 OR 환율",
-                "해외 증시·자산": "나스닥 OR S&P500 OR 연준 OR 국채 OR 비트코인",
-                "정부 정책·규제": "상법개정 OR 정부 정책 OR 세제개편 OR 세제혜택",
-                "글로벌 지정학":  "미중 OR 관세 OR 중동 OR 트럼프 OR 공급망"
-            }
-
-            for idx, sector_name in enumerate(sectors_keys):
-                target_kw = target_keywords.get(sector_name, "")
-                search_query = target_kw if target_kw else default_keywords[sector_name]
-
-                ui_status_text.markdown(f"**🔍 [{sector_name}] 데이터 수집 및 AI 정제 중... ({idx+1}/10)**")
-                ui_progress_bar.progress(int((idx / 10) * 100)) # 진행률 계산
-
-                raw_context, local_map, current_article_idx = fetch_single_sector_news(sector_name, search_query, current_article_idx)
-                curated_list = apply_prism_lens_single(sector_name, raw_context, user_interest, search_query)
-
-                st.session_state.news_data["map"].update(local_map)
-                st.session_state.news_data["results"][sector_name] = curated_list
-
-                with sector_containers[sector_name].container():
-                    if curated_list:
-                        st.markdown(f"#### ✅ [{sector_name}]")
-                        for item in curated_list:
-                            title = item.get('title', '제목 없음') if isinstance(item, dict) else item
-                            st.markdown(f"• {title}")
-                        st.write("---")
-
-            elapsed = int(time.time() - start_time)
-            mins, secs = divmod(elapsed, 60)
-            st.session_state.final_time_str = f"{mins:02d}분 {secs:02d}초"
-
-            ui_progress_bar.progress(100)
-            ui_status_text.markdown("✨ **모든 브리핑 조립이 완료되었습니다! (최종 데이터 저장 중...)**")
-
-            st.session_state.cmd_run_news = False
-            save_session_to_disk(st.session_state.market_data, st.session_state.news_data, st.session_state.alpha_data, st.session_state.yt_data)
-            time.sleep(1)
-            st.rerun()
-
-        # 화면 렌더링 뷰어 파트
-        if not st.session_state.news_data["results"]:
-            st.info("👈 왼쪽 사이드바에서 '뉴스 가동' 버튼을 눌러주세요.")
-        else:
-            col1, col2 = st.columns([1, 1])
-            with col1:
-                st.markdown("### 📋 가나디의 뉴스가져오기 완료!!")
-                st.success("우측의 [내용보기] 버튼을 누르면 요약창이 뜹니다.")
-                # [원상복구] 브리핑 소요 시간 표출 복구
-                if st.session_state.get('final_time_str'):
-                    st.markdown(f"**⏱️ 브리핑 조립 소요 시간:** `{st.session_state.final_time_str}`")
-
-                st.markdown(f"**개장전★주요이슈 점검 Updated at ({datetime.now().strftime('%Y/%m/%d')})**")
-
-                st.markdown("**[시장 지표]**")
-                for k, v in st.session_state.market_data.items():
-                    st.markdown(f"* {k}: {v}")
-                st.write("---")
-
-                categories_data = st.session_state.news_data["results"]
-                for category, items in categories_data.items():
-                    if not items:
-                        continue
-                    st.markdown(f"#### [{category}]")
-                    for idx, item in enumerate(items):
-                        title = item.get('title', '제목 없음') if isinstance(item, dict) else item
-                        item_id = item.get('id') if isinstance(item, dict) else None
-
-                        if not item_id:
-                            for k, v in st.session_state.news_data["map"].items():
-                                if v['title'] == title or title in v['title']:
-                                    item_id = k
-                                    break
-                            if not item_id:
-                                item_id = f"fallback_{category}_{idx}"
-
-                        title = re.sub(r'^\[.*?\]\s*', '', title).strip()
-
-                        c_text, c_btn = st.columns([8.5, 1.5])
-                        c_text.markdown(f"• {title}")
-                        # ✅ FIX #1 (계속): 내용보기 버튼도 동일하게 수정
-                        if c_btn.button("내용보기", key=f"btn_{category}_{idx}_{item_id}", use_container_width=True):
-                            st.session_state.selected_news_id = item_id
-                    st.write("")
-
-            with col2:
-                st.markdown("### 뉴스내용 간단히 요약")
-                if st.session_state.selected_news_id and st.session_state.selected_news_id in st.session_state.news_data["map"]:
-                    selected_info = st.session_state.news_data["map"][st.session_state.selected_news_id]
-                    title   = selected_info['title']
-                    snippet = selected_info['snippet']
-                    url     = selected_info['url']
-
-                    st.markdown(f"**🔗 [웹 브라우저에서 원본 기사 따로 열기]({url})**")
-                    st.markdown(f"**📰 기사 제목:** {title}")
-                    st.markdown("---")
-
-                    if st.session_state.selected_news_id not in st.session_state.news_data["summaries"]:
-                        with st.spinner("헤드라인에서 숫자와 통계를 뽑아내어 요약 중입니다..."):
-                            summary_text = generate_headline_data_summary(title, snippet)
-                            st.session_state.news_data["summaries"][st.session_state.selected_news_id] = summary_text
-
-                    st.info("💡 **헤드라인 기반 데이터 추출 결과**")
-                    st.write(st.session_state.news_data["summaries"][st.session_state.selected_news_id])
-                else:
-                    st.markdown('''
-                        <div style="padding: 2rem; background-color: #f8f9fa; border-radius: 10px; text-align: center; color: #6c757d;">
-                            👈 왼쪽 브리핑 보드에서 <b>[내용보기]</b> 버튼을 클릭해 보세요.<br>
-                            Gemini가 <b>"통계", "인용구", "숫자", "데이터"</b>를 포함하여 요약해 드립니다!
-                        </div>
-                    ''', unsafe_allow_html=True)
-
-    # ------------------------------------------
-    # 탭 2: Alpha Vantage (Step 1 뼈대, Step 2 연결 대기)
-    # ------------------------------------------
     with tab_alpha:
-        if st.session_state.cmd_run_alpha:
-            st.session_state.alpha_data = {"results": {}, "map": {}, "summaries": {}}
-            with st.status("💎 Alpha Vantage 프리미엄 데이터 연결 중...", expanded=True) as status:
-                st.write("🔍 [글로벌 빅테크] Sentiment API 응답 대기 중...")
-                time.sleep(1.5) # 껍데기 모션
-                st.write("🔍 [기업 실적·공시] Sentiment API 응답 대기 중...")
-                time.sleep(1.5)
-                status.update(label="✨ Step 1 뼈대 구축 완료! (실제 로직은 Step 2에서 주입됩니다)", state="complete")
-            
-            st.session_state.cmd_run_alpha = False
-            st.rerun()
+        render_tab_alpha_fragment(target_keywords, user_interest, default_keywords)
 
-        st.markdown("### 📈 글로벌 경제 감성(Sentiment) 분석 보드")
-        st.warning("🚀 현재 V10.0 멀티태스킹 UI 뼈대가 완벽 적용되었습니다. \n사이드바 버튼을 마음껏 눌러 테스트해 보세요. 탭을 전환해도 일반 뉴스 데이터가 훼손되지 않습니다! \n준님의 승인이 떨어지면 이곳에 Alpha Vantage API 로직(Step 2)을 주입하겠습니다.")
-
-    # ------------------------------------------
-    # 탭 3: 유튜브 (V9.9 100% 원상복구 탑재)
-    # ------------------------------------------
     with tab_yt:
-        if st.session_state.cmd_run_yt:
-            ch_name = st.session_state.yt_data["channel_name"]
-            ch_id = st.session_state.cmd_yt_channel_id
-            
-            with st.spinner(f"📡 '{ch_name}' 채널의 최근 15시간 영상을 스캔합니다..."):
-                st.session_state.yt_data["videos"] = fetch_youtube_videos_15h(ch_id)
-            
-            st.session_state.cmd_run_yt = False
-            save_session_to_disk(st.session_state.market_data, st.session_state.news_data, st.session_state.alpha_data, st.session_state.yt_data)
-            st.rerun()
-
-        st.markdown(f"### 📺 **{st.session_state.yt_data.get('channel_name', '')}** - 최근 15시간 업로드 영상")
-
-        if not st.session_state.yt_data["videos"]:
-            st.info("👈 왼쪽 사이드바에서 유튜브 채널 버튼을 눌러주세요.")
-        else:
-            for item in st.session_state.yt_data["videos"]:
-                # ✅ FIX #5: videoId 안전하게 추출 → KeyError 방지
-                video_id = item.get('id', {}).get('videoId')
-                if not video_id:
-                    continue  # videoId 없는 항목은 건너뜀
-
-                snippet      = item['snippet']
-                title        = sanitize_text(snippet['title'])
-                published_at = snippet['publishedAt']
-                thumb_url    = snippet['thumbnails']['high']['url']
-                video_url    = f"https://www.youtube.com/watch?v={video_id}"
-
-                dt = datetime.strptime(published_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=pytz.UTC).astimezone(pytz.timezone('Asia/Seoul'))
-                pretty_time = dt.strftime("%Y년 %m월 %d일 %H시 %M분")
-
-                with st.container():
-                    col_img, col_info = st.columns([3, 7])
-
-                    with col_img:
-                        st.image(thumb_url)
-
-                    with col_info:
-                        st.markdown(f"#### [{title}]({video_url})")
-                        st.markdown(f"🗓️ **업로드:** {pretty_time}")
-
-                        # ✅ FIX #1 (계속): 유튜브 요약 버튼도 동일하게 수정
-                        if st.button("🧠 영상 내용 프리즘 요약하기", key=f"yt_{video_id}", use_container_width=True):
-                            with st.spinner("뉴스프리즘 엔진이 유튜브 데이터를 해독 중입니다. (약 5~10초 소요)"):
-                                yt_summary = extract_transcript_and_summarize(video_id, title, snippet['description'])
-                                st.success("🎯 **AI 영상 핵심 요약 완료!**")
-                                st.write(yt_summary)
-                st.write("---")
+        render_tab_youtube_fragment()
 
 if __name__ == "__main__":
     main()
