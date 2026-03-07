@@ -326,7 +326,7 @@ def generate_headline_data_summary(title, snippet):
         return f"요약 생성 중 오류 발생: {e}"
 
 # ==========================================
-# 📈 [NEW] Alpha Vantage 프리미엄 통신 로직
+# 📈 [NEW] Alpha Vantage 프리미엄 통신 로직 (V10.1 출처 표시 추가)
 # ==========================================
 def fetch_alpha_vantage_news(sector_name, start_idx):
     if not ALPHAVANTAGE_API_KEY:
@@ -371,8 +371,10 @@ def fetch_alpha_vantage_news(sector_name, start_idx):
             feed = data.get("feed", [])
             for item in feed:
                 sentiment = item.get("overall_sentiment_label", "Neutral")
-                # 감성 라벨 부착 [Bullish], [Bearish] 등
-                clean_title = f"[{sentiment}] {sanitize_text(item.get('title', ''))}"
+                # [V10.1] 출처 도메인 파싱 및 태깅 추가
+                source_domain = item.get("source_domain", "External")
+                # 감성 라벨과 출처를 모두 포함하여 제목 조립
+                clean_title = f"[{sentiment}] [{source_domain}] {sanitize_text(item.get('title', ''))}"
                 n_id = f"A{idx}"
                 news_map[n_id] = {
                     "url": item.get('url', ''), 
@@ -385,6 +387,22 @@ def fetch_alpha_vantage_news(sector_name, start_idx):
         print(f"[Error] Alpha Vantage 통신 실패: {e}")
         
     return "\n".join(context_list), news_map, idx
+
+# 🇰🇷 [V10.1] 지연 번역(Lazy Translation) 전용 엔진
+def translate_english_to_korean(text):
+    prompt = f"""
+    아래 영어 뉴스 헤드라인을 자연스러운 한국어로 번역하세요.
+    단, 문자열 앞의 대괄호 '[Bullish]', '[Bearish]', '[Neutral]' 등 감성 라벨과 '[www.reuters.com]' 같은 출처(언론사) 태그는 **절대 번역하거나 수정하지 말고 원본 그대로 유지**하세요.
+    
+    [원본 텍스트]
+    {text}
+    """
+    try:
+        response = client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
+        return response.text.strip()
+    except Exception as e:
+        print(f"[Error] 제목 번역 실패: {e}")
+        return text # 번역 실패 시 원문이라도 표시하는 방어 로직
 
 # ==========================================
 # 📺 yt-dlp 기반 유튜브 엔진
@@ -666,26 +684,75 @@ def render_tab_alpha_fragment(target_keywords, user_interest, default_keywords):
 
         st.session_state.alpha_data = {"results": {}, "map": {}, "summaries": {}}
         st.session_state.selected_alpha_id = None
+        start_time = time.time()
         
-        with st.status("💎 글로벌 경제 감성(Sentiment) 분석 중...", expanded=True) as status:
-            sectors_keys = list(target_keywords.keys())
-            alpha_idx = 1
-            for sector_name in sectors_keys:
-                target_kw = target_keywords.get(sector_name, "")
-                search_query = target_kw if target_kw else default_keywords[sector_name]
-                
-                # 유료 감성 데이터 연결 로직
-                st.write(f"🔍 [{sector_name}] Alpha Sentiment API 스캔 중...")
-                raw_context, local_map, alpha_idx = fetch_alpha_vantage_news(sector_name, alpha_idx)
-                
-                if raw_context:
-                    st.write(f"🧠 [{sector_name}] Gemini 필터링 중...")
-                    curated_list = apply_prism_lens_single(sector_name, raw_context, user_interest, search_query)
-                    st.session_state.alpha_data["map"].update(local_map)
-                    st.session_state.alpha_data["results"][sector_name] = curated_list
+        # [V10.1] Alpha 전용 JS 실시간 타이머 도입
+        timer_placeholder = st.empty()
+        with timer_placeholder:
+            components.html(
+                """
+                <div style="font-family: 'Segoe UI', sans-serif; font-size: 16px; font-weight: 500; color: #055160; background-color: #cff4fc; padding: 20px; border-radius: 8px; border: 1px solid #b6effb; text-align: center; margin-bottom: 10px;">
+                    💎 <b>프리미엄 감성 데이터 수집 및 번역 중...</b> <br><br>
+                    ⏱️ 소요시간: <span id="time" style="font-weight: 700; font-size: 20px;">00분 00초</span>
+                </div>
+                <script>
+                    var start = Date.now();
+                    setInterval(function() {
+                        var delta = Math.floor((Date.now() - start) / 1000);
+                        var m = Math.floor(delta / 60).toString().padStart(2, '0');
+                        var s = (delta % 60).toString().padStart(2, '0');
+                        document.getElementById('time').innerText = m + '분 ' + s + '초';
+                    }, 1000);
+                </script>
+                """, height=120
+            )
+
+        ui_status_text = st.empty()
+        
+        sectors_keys = list(target_keywords.keys())
+        alpha_idx = 1
+        for sector_name in sectors_keys:
+            target_kw = target_keywords.get(sector_name, "")
+            search_query = target_kw if target_kw else default_keywords[sector_name]
             
-            status.update(label="✨ Alpha Vantage 프리미엄 분석 완료!", state="complete")
-            save_session_to_disk(st.session_state.market_data, st.session_state.news_data, st.session_state.alpha_data, st.session_state.yt_data)
+            ui_status_text.markdown(f"🔍 [{sector_name}] 감성 분석 스캔 중...")
+            raw_context, local_map, alpha_idx = fetch_alpha_vantage_news(sector_name, alpha_idx)
+            
+            if raw_context:
+                ui_status_text.markdown(f"🧠 [{sector_name}] AI 필터링 및 **한국어 번역 중...**")
+                # 1차 필터링: 영어 원문으로 10개 추리기
+                curated_list = apply_prism_lens_single(sector_name, raw_context, user_interest, search_query)
+                
+                # 2차 작업: 지연 번역 (선별된 기사만 번역)
+                translated_list = []
+                for item in curated_list:
+                    eng_title = item.get('title', '')
+                    item_id = item.get('id', '')
+                    
+                    if eng_title:
+                        # 한국어로 번역 실행
+                        kor_title = translate_english_to_korean(eng_title)
+                        
+                        # 화면에 보여줄 번역본 리스트 저장
+                        translated_list.append({"id": item_id, "title": kor_title})
+                        
+                        # news_map 내부의 데이터도 한국어로 교체 (심층분석 시 한국어 표시 목적)
+                        if item_id in local_map:
+                            local_map[item_id]['title'] = kor_title
+                
+                st.session_state.alpha_data["map"].update(local_map)
+                st.session_state.alpha_data["results"][sector_name] = translated_list
+        
+        # 타이머 종료 및 시간 기록
+        elapsed = int(time.time() - start_time)
+        mins, secs = divmod(elapsed, 60)
+        st.session_state.final_alpha_time_str = f"{mins:02d}분 {secs:02d}초"
+        
+        timer_placeholder.empty()
+        ui_status_text.empty()
+        st.success("✨ Alpha Vantage 프리미엄 분석 및 번역 완료!")
+        
+        save_session_to_disk(st.session_state.market_data, st.session_state.news_data, st.session_state.alpha_data, st.session_state.yt_data)
 
     # --- Alpha Vantage 뷰어 ---
     if not st.session_state.alpha_data["results"]:
@@ -694,6 +761,11 @@ def render_tab_alpha_fragment(target_keywords, user_interest, default_keywords):
         c1, c2 = st.columns([1, 1])
         with c1:
             st.markdown("### 📈 글로벌 감성(Sentiment) 브리핑")
+            # [V10.1] 알파 탭 전용 소요 시간 출력
+            if st.session_state.get('final_alpha_time_str'):
+                st.markdown(f"**⏱️ 프리미엄 브리핑 소요 시간:** `{st.session_state.final_alpha_time_str}`")
+            st.write("---")
+
             for category, items in st.session_state.alpha_data["results"].items():
                 if not items: 
                     continue
@@ -829,12 +901,12 @@ def main():
                 f"""
                 <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 10px;">
                     <img src="data:image/png;base64,{data}" style="height: 200px; border-radius: 8px;">
-                    <h1 style="margin: 0; padding: 0; line-height: 1.2;"> 가나디: 신문배달 와써여~~ - V10.0 Masterpiece</h1>
+                    <h1 style="margin: 0; padding: 0; line-height: 1.2;"> 가나디: 신문배달 와써여~~ - V10.1 Alpha Vanguard</h1>
                 </div>
                 """, unsafe_allow_html=True
             )
     else:
-        st.title("💎 가나디의 신문배달 - V10.0 Masterpiece")
+        st.title("💎 가나디의 신문배달 - V10.1 Alpha Vanguard")
         st.info(f"💡 '{LOGO_PATH}' 파일을 찾을 수 없습니다. 이미지를 깃허브에 업로드해 주세요.")
 
     st.markdown("##### 🚀top10 섹션 헤드라인 + 📺유튜브 주요채널들")
@@ -853,6 +925,7 @@ def main():
     if 'selected_news_id' not in st.session_state: st.session_state.selected_news_id = None
     if 'selected_alpha_id' not in st.session_state: st.session_state.selected_alpha_id = None
     if 'final_time_str' not in st.session_state: st.session_state.final_time_str = None
+    if 'final_alpha_time_str' not in st.session_state: st.session_state.final_alpha_time_str = None
 
     # ==========================================
     # ⚙️ 사이드바 제어판 (통제실 역할로 전환)
