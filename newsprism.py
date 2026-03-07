@@ -413,21 +413,25 @@ def fetch_alpha_vantage_news(sector_name, start_idx):
 
 # 🇰🇷 [V10.1] 지연 번역(Lazy Translation) 전용 엔진
 def translate_english_to_korean(text):
+    # ✅ [V10.3] 출처를 (언론사명)으로 다듬어 맨 끝에 붙이는 고도화 프롬프트
+    prompt = f"""
+    아래 영어 뉴스 헤드라인을 자연스러운 한국어로 번역하세요.
 
+    [절대 규칙]
+    1. 문장 맨 앞의 `[Bullish]`, `[Bearish]`, `[Neutral]` 감성 배지는 번역하지 말고 원문 그대로 유지하세요.
+    2. 문장 맨 끝의 `[www.example.com]` 형태의 출처 태그는 도메인을 떼고 `(언론사명)` 형태로 바꾸어 문장 맨 끝에 배치하세요. 
+       (예: [www.reuters.com] -> (Reuters), [finance.yahoo.com] -> (Yahoo Finance))
+    3. 중간의 핵심 기사 내용만 한국어로 매끄럽게 번역하세요.
 
-# [프롬프트 내용 수정]
-prompt = f"""
-아래 영어 뉴스 헤드라인을 자연스러운 한국어로 번역하세요.
-
-[절대 규칙]
-1. 문장 맨 앞의 `[Bullish]`, `[Bearish]`, `[Neutral]` 배지는 번역하지 말고 원문 그대로 유지하세요.
-2. 문장 맨 끝의 `[www.example.com]` 형태의 출처 태그는 괄호 형태인 `(언론사명)`으로 바꾸어 문장 맨 끝에 배치하세요. 
-   (예: [www.reuters.com] -> (Reuters), [finance.yahoo.com] -> (Yahoo Finance))
-3. 중간의 핵심 기사 내용만 한국어로 매끄럽게 번역하세요.
-
-[원본 텍스트]
-{text}
-"""
+    [원본 텍스트]
+    {text}
+    """
+    try:
+        response = client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
+        return response.text.strip()
+    except Exception as e:
+        print(f"[Error] 제목 번역 실패: {e}")
+        return text
 
     
     try:
@@ -1014,4 +1018,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
