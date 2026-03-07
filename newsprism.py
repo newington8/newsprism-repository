@@ -16,23 +16,31 @@ import ast
 # ==========================================
 # 📌 [보안 강화] API 키 환경변수 / st.secrets 우선 로드
 # ==========================================
+# ✅ FIX #7: API 키 하드코딩 제거 → 환경변수 또는 Streamlit secrets 사용
 def _get_secret(key: str, fallback: str = "") -> str:
+    """환경변수 → st.secrets → fallback 순으로 키를 로드합니다."""
     val = os.environ.get(key, "")
-    if val: return val
-    try: return st.secrets.get(key, fallback)
-    except Exception: return fallback
+    if val:
+        return val
+    try:
+        return st.secrets.get(key, fallback)
+    except Exception:
+        return fallback
 
+# 🚨 [중요] fallback 값을 빈 문자열("")로 비워두어 깃허브 노출을 원천 차단했습니다.
 GEMINI_API_KEY       = _get_secret("GEMINI_API_KEY",       "")
 NAVER_CLIENT_ID      = _get_secret("NAVER_CLIENT_ID",      "")
 NAVER_CLIENT_SECRET  = _get_secret("NAVER_CLIENT_SECRET",  "")
 NEWS_API_KEY         = _get_secret("NEWS_API_KEY",         "")
 YOUTUBE_API_KEY      = _get_secret("YOUTUBE_API_KEY",      "")
-ALPHAVANTAGE_API_KEY = _get_secret("ALPHAVANTAGE_API_KEY", "") # Step 2를 위한 키 미리 세팅
+# 🚀 Alpha Vantage 유료 API 키 (Step 2를 위한 준비)
+ALPHAVANTAGE_API_KEY = _get_secret("ALPHAVANTAGE_API_KEY", "")
 
+# 초고속 gemini-2.5-flash 단일 엔진
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ==========================================
-# 📌 [V10.0 업데이트] 독립 캐시(백업) 시스템
+# 📌 [V10.0] 멀티 탭 지원 독립 캐시 시스템
 # ==========================================
 CACHE_FILE = "prism_cache_v10.json"
 
@@ -62,17 +70,19 @@ def load_session_from_disk():
     return {}, {"results": {}, "map": {}, "summaries": {}}, {"results": {}, "map": {}, "summaries": {}}, {"channel_name": "", "videos": []}
 
 # ==========================================
-# 📌 뉴스 엔진 및 유틸리티 로직 (V9.9 완벽 유지)
+# 📌 뉴스 엔진 및 유틸리티 로직 (V9.9 100% 원상복구)
 # ==========================================
 def sanitize_text(text):
-    if not text: return ""
+    if not text:
+        return ""
     text = re.sub(r'<[^>]+>', '', text)
     text = text.replace('"', "'").replace('\n', ' ').replace('\r', ' ')
     text = text.replace('&quot;', "'").replace('&amp;', '&').replace('&apos;', "'")
     return text.strip()
 
 def is_within_15_hours(date_str):
-    if not date_str: return True
+    if not date_str:
+        return True
     try:
         now_utc = datetime.now(pytz.UTC)
         if 'T' in date_str and 'Z' in date_str:
@@ -81,63 +91,130 @@ def is_within_15_hours(date_str):
             dt = datetime.strptime(date_str, "%a, %d %b %Y %H:%M:%S %z").astimezone(pytz.UTC)
         elif 'GMT' in date_str:
             dt = datetime.strptime(date_str, "%a, %d %b %Y %H:%M:%S GMT").replace(tzinfo=pytz.UTC)
-        else: return True
+        else:
+            return True
         return (now_utc - dt).total_seconds() <= 15 * 3600
-    except Exception: return True
+    except Exception:
+        return True
 
+# 🚨 Finple 완벽 모방형: yf.Ticker 사용 및 period="5d" 축소 적용
 def get_market_indicators():
+    import yfinance as yf
+    
     indicators = {}
-    tickers = {'다우': '^DJI', '나스닥': '^IXIC', 'S&P500': '^GSPC', '러셀 2000': '^RUT', 
-               '필라델피아 반도체': '^SOX', '환율(원/달러)': 'KRW=X', 'WTI유가': 'CL=F'}
+    tickers = {
+        '다우': '^DJI',
+        '나스닥': '^IXIC',
+        'S&P500': '^GSPC',
+        '러셀 2000': '^RUT',
+        '필라델피아 반도체': '^SOX',
+        '환율(원/달러)': 'KRW=X',
+        'WTI유가': 'CL=F'
+    }
+
     for name, ticker_symbol in tickers.items():
         try:
+            # Finple과 완전히 동일한 객체 생성 및 기간(5d) 설정
             ticker = yf.Ticker(ticker_symbol)
             hist = ticker.history(period="5d")
+            
             if hist is not None and not hist.empty:
                 valid_hist = hist.dropna(subset=['Close'])
+                
                 if len(valid_hist) >= 2:
-                    current_price = float(valid_hist['Close'].iloc[-1])
-                    previous_close = float(valid_hist['Close'].iloc[-2])
+                    # Finple 로직 동일 적용 (iloc[-1], iloc[-2] 추출)
+                    current_price = valid_hist['Close'].iloc[-1]
+                    previous_close = valid_hist['Close'].iloc[-2]
+                    
+                    # 스칼라 값 안전 변환 (pandas 버전 호환성 방어)
+                    current_price = float(current_price.item() if hasattr(current_price, 'item') else current_price)
+                    previous_close = float(previous_close.item() if hasattr(previous_close, 'item') else previous_close)
+                    
                     change = current_price - previous_close
                     change_percent = (change / previous_close) * 100 if previous_close else 0
+                    
                     indicators[name] = f"{current_price:,.2f} ({change:+.2f}, {change_percent:+.2f}%)"
                 elif len(valid_hist) == 1:
-                    indicators[name] = f"{float(valid_hist['Close'].iloc[-1]):,.2f} (변동폭 계산 불가)"
-                else: indicators[name] = "장 마감/지연"
-            else: indicators[name] = "데이터 없음"
-        except Exception: indicators[name] = "통신 장애"
+                    current_price = valid_hist['Close'].iloc[-1]
+                    current_price = float(current_price.item() if hasattr(current_price, 'item') else current_price)
+                    indicators[name] = f"{current_price:,.2f} (변동폭 계산 불가)"
+                else:
+                    indicators[name] = "장 마감/지연"
+            else:
+                indicators[name] = "데이터 없음"
+                
+        except Exception as e:
+            print(f"[Error] 시장 지표({name}) 로드 실패: {e}")
+            indicators[name] = "통신 장애"
+
     return indicators
 
+# 🚨 [원상복구 완료] 강력한 언론사 화이트리스트 필터링
 def is_valid_article(title, publisher, link):
-    if "포토" in title or "[사진]" in title or "M포토" in title: return False
-    ALLOWED_PUBLISHERS = ["경향신문", "국민일보", "동아일보", "문화일보", "서울신문", "세계일보", "조선일보", "중앙일보", "한겨레", "한국일보", "뉴스1", "뉴시스", "연합뉴스", "연합뉴스TV", "채널A", "한국경제TV", "JTBC", "KBS", "MBC", "MBN", "SBS", "SBS Biz", "TV조선", "YTN", "매일경제", "머니투데이", "비즈워치", "서울경제", "아시아경제", "이데일리", "조선비즈", "조세일보", "파이낸셜뉴스", "한국경제", "헤럴드경제", "노컷뉴스", "더팩트", "데일리안", "시대일보", "미디어오늘", "아이뉴스24", "오마이뉴스", "프레시안", "디지털데일리", "디지털타임스", "블로터", "전자신문", "지디넷코리아", "더스쿠프", "레이디경향", "매경이코노미", "시사IN", "시사저널", "신동아", "월간 산", "이코노미스트", "주간경향", "주간동아", "주간조선", "중앙SUNDAY", "한겨레21", "한경비즈니스", "기자협회보", "농민신문", "뉴스타파", "동아사이언스", "여성신문", "일다", "코리아중앙데일리", "코리아헤럴드", "코메디닷컴", "헬스조선", "강원도민일보", "강원일보", "경기일보", "국제신문", "대구MBC", "대전일보", "매일신문", "부산일보", "전주MBC", "CJB청주방송", "JIBS", "kbc광주방송", "블룸버그", "로이터", "AP통신", "AFP통신", "CNN", "BBC", "월스트리트저널", "WSJ", "뉴욕타임스", "NYT", "파이낸셜타임스", "FT", "CNBC"]
-    ALLOWED_DOMAINS = ["khan", "kmib", "donga", "munhwa", "seoul.co.kr", "segye", "chosun", "joongang", "hani", "hankookilbo", "news1", "newsis", "yna", "yonhap", "channela", "wowtv", "jtbc", "kbs", "mbc", "mbn", "sbs", "sbsbiz", "tvchosun", "ytn", "mk.co.kr", "mt.co.kr", "bizwatch", "sedaily", "asiae", "edaily", "biz.chosun", "joseilbo", "fnnews", "hankyung", "heraldcorp", "nocutnews", "tf.co.kr", "dailian", "mediatoday", "inews24", "ohmynews", "pressian", "ddaily", "dt.co.kr", "bloter", "etnews", "zdnet", "thescoop", "sisain", "sisajournal", "shindonga", "economist", "newstapa", "dongascience", "koreaherald", "koreajoongangdaily", "kormedi", "healthchosun", "kado.net", "kwnews", "kyeonggi", "kookje", "daejonilbo", "imaeil", "busan.com", "bloomberg", "reuters", "apnews", "afp", "cnn", "bbc", "wsj", "nytimes", "ft.com", "cnbc"]
-    
-    if publisher and any(allowed.lower() in publisher.lower() for allowed in ALLOWED_PUBLISHERS): return True
-    if link and any(domain in link.lower() for domain in ALLOWED_DOMAINS): return True
+    if "포토" in title or "[사진]" in title or "M포토" in title:
+        return False
+
+    ALLOWED_PUBLISHERS = [
+        "경향신문", "국민일보", "동아일보", "문화일보", "서울신문", "세계일보", "조선일보", "중앙일보", "한겨레", "한국일보",
+        "뉴스1", "뉴시스", "연합뉴스", "연합뉴스TV", "채널A", "한국경제TV", "JTBC", "KBS", "MBC", "MBN", "SBS", "SBS Biz", "TV조선", "YTN",
+        "매일경제", "머니투데이", "비즈워치", "서울경제", "아시아경제", "이데일리", "조선비즈", "조세일보", "파이낸셜뉴스", "한국경제", "헤럴드경제",
+        "노컷뉴스", "더팩트", "데일리안", "시대일보", "미디어오늘", "아이뉴스24", "오마이뉴스", "프레시안",
+        "디지털데일리", "디지털타임스", "블로터", "전자신문", "지디넷코리아",
+        "더스쿠프", "레이디경향", "매경이코노미", "시사IN", "시사저널", "신동아", "월간 산", "이코노미스트", "주간경향", "주간동아", "주간조선", "중앙SUNDAY", "한겨레21", "한경비즈니스",
+        "기자협회보", "농민신문", "뉴스타파", "동아사이언스", "여성신문", "일다", "코리아중앙데일리", "코리아헤럴드", "코메디닷컴", "헬스조선",
+        "강원도민일보", "강원일보", "경기일보", "국제신문", "대구MBC", "대전일보", "매일신문", "부산일보", "전주MBC", "CJB청주방송", "JIBS", "kbc광주방송",
+        "블룸버그", "로이터", "AP통신", "AFP통신", "CNN", "BBC", "월스트리트저널", "WSJ", "뉴욕타임스", "NYT", "파이낸셜타임스", "FT", "CNBC"
+    ]
+
+    ALLOWED_DOMAINS = [
+        "khan", "kmib", "donga", "munhwa", "seoul.co.kr", "segye", "chosun", "joongang", "hani", "hankookilbo",
+        "news1", "newsis", "yna", "yonhap", "channela", "wowtv", "jtbc", "kbs", "mbc", "mbn", "sbs", "sbsbiz", "tvchosun", "ytn",
+        "mk.co.kr", "mt.co.kr", "bizwatch", "sedaily", "asiae", "edaily", "biz.chosun", "joseilbo", "fnnews", "hankyung", "heraldcorp",
+        "nocutnews", "tf.co.kr", "dailian", "mediatoday", "inews24", "ohmynews", "pressian",
+        "ddaily", "dt.co.kr", "bloter", "etnews", "zdnet",
+        "thescoop", "sisain", "sisajournal", "shindonga", "economist", "newstapa", "dongascience", "koreaherald", "koreajoongangdaily", "kormedi", "healthchosun",
+        "kado.net", "kwnews", "kyeonggi", "kookje", "daejonilbo", "imaeil", "busan.com",
+        "bloomberg", "reuters", "apnews", "afp", "cnn", "bbc", "wsj", "nytimes", "ft.com", "cnbc"
+    ]
+
+    if publisher:
+        for allowed in ALLOWED_PUBLISHERS:
+            if allowed.lower() in publisher.lower():
+                return True
+
+    if link:
+        for domain in ALLOWED_DOMAINS:
+            if domain in link.lower():
+                return True
+
     return False
 
+# 🚀 단일 섹션 뉴스 수집 엔진 (트리플 엔진 완벽 복구)
 def fetch_single_sector_news(sector_name, search_query, start_idx):
     all_news_context = []
     news_map = {}
     article_idx = start_idx
 
-    # GNews 엔진
+    # 1. GNews 엔진
+    google_news = GNews(language='ko', country='KR', max_results=30, period='15h')
     try:
-        google_news = GNews(language='ko', country='KR', max_results=30, period='15h')
         for item in google_news.get_news(search_query):
             if is_within_15_hours(item.get('published date', '')):
                 pub = item.get('publisher', {})
                 publisher_name = pub.get('title', '') if isinstance(pub, dict) else str(pub)
-                if not is_valid_article(item['title'], publisher_name, item.get('url', '')): continue
+
+                if not is_valid_article(item['title'], publisher_name, item.get('url', '')):
+                    continue
+
                 clean_title = sanitize_text(item['title'])
                 n_id = f"N{article_idx}"
                 news_map[n_id] = {"url": item['url'], "title": clean_title, "snippet": sanitize_text(item.get('description', ''))}
                 all_news_context.append(f"[ID:{n_id}] {clean_title}")
                 article_idx += 1
-    except Exception: pass
+    except Exception as e:
+        print(f"[Error] GNews 수집 실패 ({sector_name}): {e}")
 
-    # Naver Search API 엔진
+    # 2. Naver Search API 엔진
     try:
         naver_url = "https://openapi.naver.com/v1/search/news.json"
         naver_headers = {"X-Naver-Client-Id": NAVER_CLIENT_ID, "X-Naver-Client-Secret": NAVER_CLIENT_SECRET}
@@ -147,14 +224,18 @@ def fetch_single_sector_news(sector_name, search_query, start_idx):
                 if is_within_15_hours(item.get('pubDate', '')):
                     link = item.get('originallink', item.get('link', ''))
                     clean_title = sanitize_text(item['title'])
-                    if not is_valid_article(clean_title, "", link): continue
+
+                    if not is_valid_article(clean_title, "", link):
+                        continue
+
                     n_id = f"N{article_idx}"
                     news_map[n_id] = {"url": link, "title": clean_title, "snippet": sanitize_text(item.get('description', ''))}
                     all_news_context.append(f"[ID:{n_id}] {clean_title}")
                     article_idx += 1
-    except Exception: pass
+    except Exception as e:
+        print(f"[Error] 네이버 뉴스 수집 실패 ({sector_name}): {e}")
 
-    # NewsAPI 엔진
+    # 🚨 3. [원상복구 완료] NewsAPI 외신 수집 엔진
     try:
         newsapi_url = "https://newsapi.org/v2/everything"
         newsapi_params = {"apiKey": NEWS_API_KEY, "q": search_query, "language": "ko", "sortBy": "publishedAt", "pageSize": 30}
@@ -166,44 +247,81 @@ def fetch_single_sector_news(sector_name, search_query, start_idx):
                         pub = item.get('source', {})
                         publisher_name = pub.get('name', '') if isinstance(pub, dict) else str(pub)
                         clean_title = sanitize_text(item['title'])
-                        if not is_valid_article(clean_title, publisher_name, item.get('url', '')): continue
+
+                        if not is_valid_article(clean_title, publisher_name, item.get('url', '')):
+                            continue
+
                         n_id = f"N{article_idx}"
                         news_map[n_id] = {"url": item.get('url', ''), "title": clean_title, "snippet": sanitize_text(item.get('description', ''))}
                         all_news_context.append(f"[ID:{n_id}] {clean_title}")
                         article_idx += 1
-    except Exception: pass
+    except Exception as e:
+        print(f"[Error] NewsAPI 수집 실패 ({sector_name}): {e}")
 
     return "\n".join(all_news_context), news_map, article_idx
 
 def apply_prism_lens_single(sector_name, news_context, user_interest, target_kw):
-    if not news_context.strip(): return []
+    if not news_context.strip():
+        return []
+
+    # ✅ FIX #2: raw_text를 함수 스코프 상단에 미리 초기화 → NameError 방지
+    raw_text = ""
+
     prompt = f"""
     당신은 데이터 분류 및 중복 제거 전문가입니다.
     아래 [{sector_name}] 섹션에 수집된 원본 기사들 중, 중복된 이슈를 하나로 묶고 가장 정보가 풍부한 기사를 최대 10개만 선별하세요.
     반드시 마크다운 코드 블록 없는 '순수 JSON 배열(Array) 형식'으로만 응답하세요.
 
-    [수집 원본] {news_context}
-    [사용자의 선택 기준 / 섹션 타겟 키워드] {user_interest} / {target_kw if target_kw else "없음"}
+    [수집 원본]
+    {news_context}
+
+    [사용자의 선택 기준 / 섹션 타겟 키워드]
+    {user_interest} / {target_kw if target_kw else "없음"}
 
     [★★★ 절대 준수 규칙 ★★★]
     1. 원본의 `[ID:N숫자]` 꼬리표를 확인하여 ID를 정확히 매칭하세요.
-    2. JSON의 모든 키(key)와 문자열 값(value)은 반드시 쌍따옴표(")로 감싸야 합니다.
-    3. 기사 제목(title) 내부에 인용구가 있다면, 홑따옴표(')로 변경하세요.
-    4. 대괄호 [] 로 시작하고 끝나는 JSON 배열만 출력하세요.
+    2. JSON의 모든 키(key)와 문자열 값(value)은 반드시 쌍따옴표(")로 감싸야 합니다 (표준 JSON 규격).
+    3. 기사 제목(title) 내부에 인용구가 있다면, 파싱 에러 방지를 위해 기사 제목 내부의 따옴표만 홑따옴표(')로 변경하세요.
+    4. 부가 설명 없이 대괄호 [] 로 시작하고 끝나는 JSON 배열만 출력하세요.
+
+    [출력 JSON 구조 예시]
+    [
+        {{"id": "N1", "title": "순수한 뉴스 제목 1"}},
+        {{"id": "N2", "title": "이것은 '인용구'가 포함된 제목입니다"}}
+    ]
     """
     try:
         response = client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
-        cleaned_text = response.text.strip().replace("```json", "").replace("```", "").strip()
+        raw_text = response.text.strip()
+        cleaned_text = raw_text.replace("```json", "").replace("```", "").strip()
+
         json_match = re.search(r'\[.*\]', cleaned_text, re.DOTALL)
-        if json_match: cleaned_text = json_match.group(0)
-        try: return json.loads(cleaned_text)
-        except json.JSONDecodeError: return ast.literal_eval(cleaned_text)
-    except Exception: return [{"id": f"err_{sector_name}", "title": f"🚨 {sector_name} 데이터 정제 중 오류 발생"}]
+        if json_match:
+            cleaned_text = json_match.group(0)
+
+        try:
+            # 1차 시도: 표준 JSON 파싱
+            return json.loads(cleaned_text)
+        except json.JSONDecodeError:
+            # 2차 시도: AI가 홑따옴표를 썼을 경우 파이썬 기본 해석기(ast)로 강제 파싱 구출
+            return ast.literal_eval(cleaned_text)
+
+    except Exception as e:
+        print(f"[Error] JSON 파싱 2차 구출 실패 ({sector_name}): {e}\n원본응답: {raw_text[:100]}...")
+        return [{"id": f"err_{sector_name}", "title": f"🚨 {sector_name} 데이터 정제 중 오류 발생"}]
 
 def generate_headline_data_summary(title, snippet):
-    prompt = f'"{title}"\n이 기사의 내용을 찾아줘. 기사에 나온 "통계", "인용구", "숫자", "데이터" 등 중요한 요소를 꼭 포함시켜서 이 기사 내용을 3문단으로 요약해줘.'
-    try: return client.models.generate_content(model='gemini-2.5-flash', contents=prompt).text
-    except Exception as e: return f"요약 생성 중 오류 발생: {e}"
+    prompt = f"""
+    "{title}"
+    이 기사의 내용을 찾아줘.
+    기사에 나온 "통계", "인용구", "숫자", "데이터" 등 중요한 요소를 꼭 포함시켜서 이 기사 내용을 3문단으로 요약해줘.
+    """
+    try:
+        response = client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
+        return response.text
+    except Exception as e:
+        print(f"[Error] 뉴스 헤드라인 요약 생성 실패: {e}")
+        return f"요약 생성 중 오류 발생: {e}"
 
 # ==========================================
 # 📺 yt-dlp 기반 유튜브 엔진
@@ -211,22 +329,47 @@ def generate_headline_data_summary(title, snippet):
 def fetch_youtube_videos_15h(channel_id):
     time_15h_ago = datetime.now(pytz.UTC) - timedelta(hours=15)
     published_after = time_15h_ago.isoformat().replace("+00:00", "Z")
+
     url = "https://www.googleapis.com/youtube/v3/search"
-    params = {"part": "snippet", "channelId": channel_id, "maxResults": 10, "order": "date", "type": "video", "publishedAfter": published_after, "key": YOUTUBE_API_KEY}
+    params = {
+        "part": "snippet",
+        "channelId": channel_id,
+        "maxResults": 10,
+        "order": "date",
+        "type": "video",
+        "publishedAfter": published_after,
+        "key": YOUTUBE_API_KEY
+    }
+
     try:
         res = requests.get(url, params=params)
-        return res.json().get("items", []) if res.status_code == 200 else []
-    except Exception: return []
+        if res.status_code == 200:
+            return res.json().get("items", [])
+        return []
+    except Exception as e:
+        print(f"[Error] 유튜브 영상 리스트 수집 실패: {e}")
+        return []
 
 def extract_youtube_info_sync(url: str):
     try:
-        ydl_opts = {'skip_download': True, 'writesubtitles': True, 'writeautomaticsub': True, 'subtitleslangs': ['ko', 'en'], 'quiet': True, 'no_warnings': True}
+        ydl_opts = {
+            'skip_download': True,
+            'writesubtitles': True,
+            'writeautomaticsub': True,
+            'subtitleslangs': ['ko', 'en'],
+            'quiet': True,
+            'no_warnings': True,
+        }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             return ydl.extract_info(url, download=False)
-    except Exception: return None
+    except Exception as e:
+        print(f"[Error] yt_dlp 정보 추출 실패: {e}")
+        return None
 
 def extract_transcript_and_summarize(video_id, title, description):
     video_url = f"https://www.youtube.com/watch?v={video_id}"
+    print(f"📥 영상 데이터 스캔 시작: {video_url}")
+
     info = extract_youtube_info_sync(video_url)
     full_text = ""
 
@@ -235,59 +378,111 @@ def extract_transcript_and_summarize(video_id, title, description):
         auto_subs = info.get('automatic_captions')
         target_sub = None
 
-        if subtitles and 'ko' in subtitles: target_sub = subtitles['ko']
-        elif auto_subs and 'ko' in auto_subs: target_sub = auto_subs['ko']
-        elif subtitles and 'en' in subtitles: target_sub = subtitles['en']
-        elif auto_subs and 'en' in auto_subs: target_sub = auto_subs['en']
+        if subtitles and 'ko' in subtitles:       target_sub = subtitles['ko']
+        elif auto_subs and 'ko' in auto_subs:     target_sub = auto_subs['ko']
+        elif subtitles and 'en' in subtitles:     target_sub = subtitles['en']
+        elif auto_subs and 'en' in auto_subs:     target_sub = auto_subs['en']
 
         if target_sub:
+            # ✅ FIX #6: next()에 기본값 None 적용 + target_sub 빈 리스트 방어 처리
             json3_url = next((fmt['url'] for fmt in target_sub if fmt.get('ext') == 'json3'), None)
-            if not json3_url and target_sub: json3_url = target_sub[0].get('url')
+            if not json3_url and target_sub:
+                json3_url = target_sub[0].get('url')
+
             if json3_url:
                 try:
                     sub_resp = requests.get(json3_url)
                     if sub_resp.status_code == 200:
                         data = sub_resp.json()
-                        texts = [seg['utf8'] for event in data.get('events', []) if 'segs' in event for seg in event['segs'] if 'utf8' in seg]
+                        events = data.get('events', [])
+                        texts = []
+                        for event in events:
+                            if 'segs' in event:
+                                for seg in event['segs']:
+                                    if 'utf8' in seg:
+                                        texts.append(seg['utf8'])
                         full_text = " ".join(texts)
-                except Exception: pass
+                except Exception as e:
+                    print(f"[Error] JSON3 자막 파싱 실패: {e}")
 
-    if not full_text or len(full_text) < 50: full_text = f"영상 설명: {description}\n(주의: 이 영상은 자막 추출이 불가하여 설명란으로 요약합니다.)"
+    if not full_text or len(full_text) < 50:
+        print("⚠️ 자막이 없거나 짧아 설명란 메타데이터로 대체합니다.")
+        full_text = f"영상 설명: {description}\n(주의: 이 영상은 자막 추출이 불가하여 설명란으로 요약합니다.)"
 
     prompt = f"""
-    국제정세/경제 전문 애널리스트 관점에서 타임스탬프와 핵심 데이터를 포함하여 5문단으로 풍부하게 요약해줘.
-    [영상 대본/설명] {full_text[:200000]}
+    아래는 유튜브 영상 '{title}'의 대본(자막) 또는 설명란 내용입니다.
+    이를 바탕으로 영상을 직접 본 것처럼 완벽하게 요약해 주세요.
+
+    [영상 대본/설명]
+    {full_text[:200000]}
+
+    [요약 규칙]
+    0. 당신은 국제정세/경제 전문 애널리스트이자 탑티어 뉴스 큐레이터입니다.
+    1. 영상에서 나온 통계, 인용구, 숫자, 데이터, 인물 등 핵심 요소를 반드시 포함시키세요
+    2. 1번에서 나온 요소들의 타임스탬프도 함께 표기하여 영상 어느 부분에서 언급되었는지 명시하세요.
+    3. 요약은 최대 5문단으로 구성하고 각 문단은 5~7문장으로 풍부하게 작성하세요.
+    4. 각 문단에서 가장 중요한 데이터들은 굵은 글씨로 강조하세요.
     """
-    try: return client.models.generate_content(model='gemini-2.5-pro', contents=prompt).text
-    except Exception: return "AI 요약 중 오류가 발생했습니다."
+
+    try:
+        response = client.models.generate_content(model='gemini-2.5-pro', contents=prompt)
+        return response.text
+    except Exception as e:
+        print(f"[Error] 유튜브 AI 영상 요약 실패: {e}")
+        return "AI 요약 중 오류가 발생했습니다."
+
 
 # ==========================================
-# 📌 메인 앱 렌더링 (V10.0 독립 탭 구조 적용)
+# 📌 메인 앱 렌더링
 # ==========================================
 def main():
     st.set_page_config(page_title="News Prism V10.0", page_icon="💎", layout="wide")
 
-    # CSS 유지
+    # [원상복구] CSS 속성 100% 복구 (탭 구조 내부에서도 Sticky 적용 유지)
     st.markdown("""
         <style>
             .main, .main .block-container { overflow: visible !important; }
+            div[data-testid="stColumn"]:nth-of-type(1),
+            [data-testid="column"]:nth-of-type(1) { border-right: 2px solid #e6e6e6 !important; padding-right: 2rem !important; }
+            div[data-testid="stColumn"]:nth-of-type(2),
+            [data-testid="column"]:nth-of-type(2) {
+                position: -webkit-sticky !important; position: sticky !important; top: 4rem !important;
+                align-self: flex-start !important; max-height: calc(100vh - 4rem) !important;
+                overflow-y: auto !important; z-index: 100 !important; padding-left: 1rem !important;
+            }
+            div[data-testid="column"]:nth-of-type(1) div[data-testid="stHorizontalBlock"] { margin-bottom: -15px !important; align-items: center !important; }
             ::-webkit-scrollbar { width: 6px; }
             ::-webkit-scrollbar-thumb { background-color: #cccccc; border-radius: 4px; }
         </style>
     """, unsafe_allow_html=True)
 
-    # 브랜딩 로고 유지
+    # ------------------------------------------
+    # 🖼️ [V9.9 Upgrade] 텍스트 이모지 -> PNG 로고 교체 로직 (원상복구)
+    # ------------------------------------------
     LOGO_PATH = "newsprismdog.png"
+    
     if os.path.exists(LOGO_PATH):
         import base64
         with open(LOGO_PATH, "rb") as f:
             data = base64.b64encode(f.read()).decode("utf-8")
-            st.markdown(f'<div style="display: flex; align-items: center; gap: 15px; margin-bottom: 10px;"><img src="data:image/png;base64,{data}" style="height: 200px; border-radius: 8px;"><h1 style="margin: 0; padding: 0; line-height: 1.2;"> 가나디: 신문배달 와써여~~ - V10.0 (Step 1)</h1></div>', unsafe_allow_html=True)
-    else: st.title("💎 가나디의 신문배달 - V10.0 (Step 1)")
+            st.markdown(
+                f"""
+                <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 10px;">
+                    <img src="data:image/png;base64,{data}" style="height: 200px; border-radius: 8px;">
+                    <h1 style="margin: 0; padding: 0; line-height: 1.2;"> 가나디: 신문배달 와써여~~ - V10.0 (Step 1)</h1>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+    else:
+        st.title("💎 가나디의 신문배달 - V10.0 (Step 1)")
+        st.info(f"💡 '{LOGO_PATH}' 파일을 찾을 수 없습니다. 이미지를 깃허브에 업로드해 주세요.")
+
+    st.markdown("##### 🚀top10 섹션 헤드라인 + 📺유튜브 주요채널들 ")
     st.write("---")
 
     # ==========================================
-    # ⚙️ 상태(서랍) 완벽 분리 세팅
+    # ⚙️ [V10.0] 상태 관리 (독립 서랍 구조)
     # ==========================================
     m_data, n_data, a_data, y_data = load_session_from_disk()
     
@@ -303,138 +498,246 @@ def main():
     if 'alpha_data' not in st.session_state: st.session_state.alpha_data = a_data
     if 'yt_data' not in st.session_state: st.session_state.yt_data = y_data
 
-    # UI 상태 저장소 (탭 내에서 선택한 기사 ID 등)
+    # UI 상태 저장소
     if 'selected_news_id' not in st.session_state: st.session_state.selected_news_id = None
-    if 'selected_alpha_id' not in st.session_state: st.session_state.selected_alpha_id = None
+    if 'final_time_str' not in st.session_state: st.session_state.final_time_str = None
 
     # ==========================================
-    # ⚙️ 사이드바 제어판 (신호 전송부)
+    # ⚙️ 사이드바 제어판
     # ==========================================
     st.sidebar.header("⚙️ 고급 설정")
-    user_interest = st.sidebar.text_area("커스터마이징 기본값", value="거시 경제 흐름, 미국 증시, 그리고 AI와 반도체 산업 변화에 특히 관심이 많음.", height=100)
+    user_interest = st.sidebar.text_area(
+        "커스터마이징 기본값",
+        value="거시 경제 흐름, 미국 증시, 그리고 AI와 반도체 산업 변화에 특히 관심이 많음.",
+        height=100
+    )
 
-    # V9.9 키워드 세팅 유지
+    # [원상복구] 10대 섹션별 키워드 타겟팅 입력창 전체 복구
     with st.sidebar.expander("🎯 10대 섹션별 키워드 타겟팅", expanded=False):
-        t1 = st.text_input("① 국내 대장주", placeholder="예: LG에너지솔루션")
-        # ...(중략 없이 V9.9 로직과 동일하게 타겟 키워드 딕셔너리 구성)
-        target_keywords = {"국내 대장주": t1.strip()} # 지면상 생략, 실제 구동엔 V9.9 로직이 들어갑니다. (아래 기본값 딕셔너리 참조)
+        t1  = st.text_input("① 국내 대장주",    placeholder="예: LG에너지솔루션")
+        t2  = st.text_input("② 글로벌 빅테크",  placeholder="예: 메타")
+        t3  = st.text_input("③ 기업 실적·공시", placeholder="예: 배당락")
+        t4  = st.text_input("④ 미래 첨단산업",  placeholder="예: 전고체")
+        t5  = st.text_input("⑤ 거시경제 지표",  placeholder="예: 실업률")
+        t6  = st.text_input("⑥ 부동산·원자재",  placeholder="예: 구리")
+        t7  = st.text_input("⑦ 국내 증시·시황", placeholder="예: 공매도")
+        t8  = st.text_input("⑧ 해외 증시·자산", placeholder="예: 이더리움")
+        t9  = st.text_input("⑨ 정부 정책·규제", placeholder="예: 금투세")
+        t10 = st.text_input("⑩ 글로벌 지정학",  placeholder="예: 이스라엘")
 
-    default_keywords = {
-        "국내 대장주": "삼성전자 OR SK하이닉스 OR 현대차 OR 에코프로 OR 금융주",
-        "글로벌 빅테크": "엔비디아 OR 애플 OR 테슬라 OR 마이크로소프트 OR TSMC",
-        "기업 실적·공시": "어닝 OR 실적발표 OR 주주환원 OR M&A OR 자사주",
-        "미래 첨단산업": "AI OR 반도체 OR 2차전지 OR 자율주행 OR 로봇",
-        "거시경제 지표": "기준금리 OR 인플레이션 OR 환율 OR CPI OR 고용지표",
-        "부동산·원자재": "부동산 시장 OR PF OR 국제유가 OR 금 가격 OR 원자재",
-        "국내 증시·시황": "코스피 OR 코스닥 OR 상법개정 OR 수급 OR 환율",
-        "해외 증시·자산": "나스닥 OR S&P500 OR 연준 OR 국채 OR 비트코인",
-        "정부 정책·규제": "상법개정 OR 정부 정책 OR 세제개편 OR 세제혜택",
-        "글로벌 지정학": "미중 OR 관세 OR 중동 OR 트럼프 OR 공급망"
+    target_keywords = {
+        "국내 대장주":   t1.strip(),  "글로벌 빅테크":  t2.strip(),
+        "기업 실적·공시": t3.strip(), "미래 첨단산업":  t4.strip(),
+        "거시경제 지표":  t5.strip(), "부동산·원자재":  t6.strip(),
+        "국내 증시·시황": t7.strip(), "해외 증시·자산": t8.strip(),
+        "정부 정책·규제": t9.strip(), "글로벌 지정학":  t10.strip()
     }
 
     col_run, col_stop = st.sidebar.columns(2)
-    # 버튼 클릭 시 탭 이동 없이 신호(Flag)만 True로 변경
-    if col_run.button("🚀 뉴스 가동", type="primary", use_container_width=True):
+    # ✅ FIX #1: width="stretch" → use_container_width=True (전체 동일하게 적용)
+    if col_run.button("🚀뉴스 가동", type="primary", use_container_width=True):
         st.session_state.cmd_run_news = True
-    
+
     if col_stop.button("🛑 정지", use_container_width=True):
-        st.sidebar.error("🚫 가동이 취소되었습니다.")
+        st.sidebar.error("🚫 브리핑 가동이 취소되었습니다.")
         st.stop()
 
     st.sidebar.markdown("---")
-    
-    # [NEW] Alpha Vantage 버튼 신설 (독립 구동)
+
+    # [V10.0 추가] Alpha Vantage 버튼
     st.sidebar.header("📈 프리미엄 데이터 (유료)")
     if st.sidebar.button("💎 Alpha Vantage 가동", use_container_width=True):
         st.session_state.cmd_run_alpha = True
 
     st.sidebar.markdown("---")
 
-    # 유튜브 채널 버튼
     st.sidebar.header("📺 유튜브 배달")
-    yt_channels = {"오선의 미국증시 라이브": "UC_JJ_NhRqPKcIOj5Ko3W_3w", "이효석 아카데미": "UCxvdCnvGODDyuvnELnLkQWw", "내일은 투자왕 김단테": "UCKTMvIu9a4VGSrpWy-8bUrQ", "센서스튜디오": "UC6dN6Rilzh9KmzymxnZGslg"}
+    yt_channels = {
+        "오선의 미국증시 라이브": "UC_JJ_NhRqPKcIOj5Ko3W_3w",
+        "이효석 아카데미":        "UCxvdCnvGODDyuvnELnLkQWw",
+        "내일은 투자왕 김단테":   "UCKTMvIu9a4VGSrpWy-8bUrQ",
+        "센서스튜디오":           "UC6dN6Rilzh9KmzymxnZGslg"
+    }
+
     for ch_name, ch_id in yt_channels.items():
+        # ✅ FIX #1 (계속): 유튜브 채널 버튼도 동일하게 수정
         if st.sidebar.button(f"▶️ {ch_name}", use_container_width=True):
             st.session_state.cmd_run_yt = True
             st.session_state.cmd_yt_channel_id = ch_id
             st.session_state.yt_data["channel_name"] = ch_name
 
     # ==========================================
-    # 🖥️ 메인 화면: 3단 독립 탭 렌더링부
+    # 🖥️ 3단 독립 탭 (V10.0 레이아웃)
     # ==========================================
     tab_news, tab_alpha, tab_yt = st.tabs(["📰 일반 뉴스 브리핑", "📈 Alpha Vantage 프리미엄", "📺 유튜브 인사이트"])
 
     # ------------------------------------------
-    # 탭 1: 일반 뉴스 (기존 V9.9 로직 탑재)
+    # 탭 1: 일반 뉴스 (V9.9 작동 로직 및 UX 100% 원상복구 탑재)
     # ------------------------------------------
     with tab_news:
         if st.session_state.cmd_run_news:
-            # 상태 초기화 및 실행
             st.session_state.news_data = {"results": {}, "map": {}, "summaries": {}}
+            st.session_state.selected_news_id = None
             start_time = time.time()
-            
-            with st.status("🚀 뉴스프리즘 엔진 순차 렌더링 가동 중...", expanded=True) as status:
-                st.session_state.market_data = get_market_indicators()
-                st.write(f"📈 **[시장 지표]** {' | '.join([f'{k}: {v}' for k, v in st.session_state.market_data.items()])}")
-                
-                current_article_idx = 1
-                for idx, sector_name in enumerate(default_keywords.keys()):
-                    search_query = target_keywords.get(sector_name) if target_keywords.get(sector_name) else default_keywords[sector_name]
-                    st.write(f"🔍 [{sector_name}] 데이터 수집 및 AI 정제 중... ({idx+1}/10)")
-                    
-                    raw_context, local_map, current_article_idx = fetch_single_sector_news(sector_name, search_query, current_article_idx)
-                    curated_list = apply_prism_lens_single(sector_name, raw_context, user_interest, search_query)
-                    
-                    st.session_state.news_data["map"].update(local_map)
-                    st.session_state.news_data["results"][sector_name] = curated_list
-                
-                status.update(label="✨ 브리핑 조립 완료!", state="complete")
-            
-            # 가동 완료 후 신호 끄기 & 자동 저장
+
+            # [원상복구] JS 기반 실시간 로딩 타이머 복구
+            timer_placeholder = st.empty()
+            with timer_placeholder:
+                components.html(
+                    """
+                    <div style="font-family: 'Segoe UI', sans-serif; font-size: 16px; font-weight: 500; color: #0f5132; background-color: #d1e7dd; padding: 20px; border-radius: 8px; border: 1px solid #badbcc; text-align: center; margin-bottom: 10px;">
+                        🚀 <b>뉴스프리즘 엔진 순차 렌더링 가동 중...</b> <br><br>
+                        ⏱️ 소요시간: <span id="time" style="font-weight: 700; font-size: 20px;">00분 00초</span>
+                    </div>
+                    <script>
+                        var start = Date.now();
+                        setInterval(function() {
+                            var delta = Math.floor((Date.now() - start) / 1000);
+                            var m = Math.floor(delta / 60).toString().padStart(2, '0');
+                            var s = (delta % 60).toString().padStart(2, '0');
+                            document.getElementById('time').innerText = m + '분 ' + s + '초';
+                        }, 1000);
+                    </script>
+                    """, height=120
+                )
+
+            ui_status_text = st.empty()
+            ui_progress_bar = st.progress(0) # [원상복구] 진행률 프로그레스 바 복구
+
+            st.markdown("### 📋 오늘의 텍스트 브리핑 (실시간 로딩 중... ⏳)")
+            market_ph = st.empty()
+            market_ph.info("📈 글로벌 마켓 지표를 스캔하고 있습니다...")
+
+            sectors_keys = list(target_keywords.keys())
+            sector_containers = {sec: st.empty() for sec in sectors_keys}
+
+            # 0. 시장 지표 스캔
+            st.session_state.market_data = get_market_indicators()
+            market_str = " | ".join([f"{k}: {v}" for k, v in st.session_state.market_data.items()])
+            market_ph.success(f"**[시장 지표]** {market_str}")
+
+            # ✅ FIX #4: current_article_idx는 반드시 버튼 블록 내부에서만 초기화 (현재 위치 OK)
+            current_article_idx = 1
+            default_keywords = {
+                "국내 대장주":   "삼성전자 OR SK하이닉스 OR 현대차 OR 에코프로 OR 금융주",
+                "글로벌 빅테크":  "엔비디아 OR 애플 OR 테슬라 OR 마이크로소프트 OR TSMC",
+                "기업 실적·공시": "어닝 OR 실적발표 OR 주주환원 OR M&A OR 자사주",
+                "미래 첨단산업":  "AI OR 반도체 OR 2차전지 OR 자율주행 OR 로봇",
+                "거시경제 지표":  "기준금리 OR 인플레이션 OR 환율 OR CPI OR 고용지표",
+                "부동산·원자재":  "부동산 시장 OR PF OR 국제유가 OR 금 가격 OR 원자재",
+                "국내 증시·시황": "코스피 OR 코스닥 OR 상법개정 OR 수급 OR 환율",
+                "해외 증시·자산": "나스닥 OR S&P500 OR 연준 OR 국채 OR 비트코인",
+                "정부 정책·규제": "상법개정 OR 정부 정책 OR 세제개편 OR 세제혜택",
+                "글로벌 지정학":  "미중 OR 관세 OR 중동 OR 트럼프 OR 공급망"
+            }
+
+            for idx, sector_name in enumerate(sectors_keys):
+                target_kw = target_keywords.get(sector_name, "")
+                search_query = target_kw if target_kw else default_keywords[sector_name]
+
+                ui_status_text.markdown(f"**🔍 [{sector_name}] 데이터 수집 및 AI 정제 중... ({idx+1}/10)**")
+                ui_progress_bar.progress(int((idx / 10) * 100)) # 진행률 계산
+
+                raw_context, local_map, current_article_idx = fetch_single_sector_news(sector_name, search_query, current_article_idx)
+                curated_list = apply_prism_lens_single(sector_name, raw_context, user_interest, search_query)
+
+                st.session_state.news_data["map"].update(local_map)
+                st.session_state.news_data["results"][sector_name] = curated_list
+
+                with sector_containers[sector_name].container():
+                    if curated_list:
+                        st.markdown(f"#### ✅ [{sector_name}]")
+                        for item in curated_list:
+                            title = item.get('title', '제목 없음') if isinstance(item, dict) else item
+                            st.markdown(f"• {title}")
+                        st.write("---")
+
+            elapsed = int(time.time() - start_time)
+            mins, secs = divmod(elapsed, 60)
+            st.session_state.final_time_str = f"{mins:02d}분 {secs:02d}초"
+
+            ui_progress_bar.progress(100)
+            ui_status_text.markdown("✨ **모든 브리핑 조립이 완료되었습니다! (최종 데이터 저장 중...)**")
+
             st.session_state.cmd_run_news = False
             save_session_to_disk(st.session_state.market_data, st.session_state.news_data, st.session_state.alpha_data, st.session_state.yt_data)
-            st.rerun() # 현재 탭 리렌더링
+            time.sleep(1)
+            st.rerun()
 
-        # --- 데이터 뷰어 (탭 내부에 고정) ---
-        if st.session_state.news_data["results"]:
-            col_list, col_summary = st.columns([1, 1])
-            with col_list:
-                st.markdown("### 📋 오늘의 텍스트 브리핑")
-                for category, items in st.session_state.news_data["results"].items():
-                    if not items: continue
+        # 화면 렌더링 뷰어 파트
+        if not st.session_state.news_data["results"]:
+            st.info("👈 왼쪽 사이드바에서 '뉴스 가동' 버튼을 눌러주세요.")
+        else:
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                st.markdown("### 📋 가나디의 뉴스가져오기 완료!!")
+                st.success("우측의 [내용보기] 버튼을 누르면 요약창이 뜹니다.")
+                # [원상복구] 브리핑 소요 시간 표출 복구
+                if st.session_state.get('final_time_str'):
+                    st.markdown(f"**⏱️ 브리핑 조립 소요 시간:** `{st.session_state.final_time_str}`")
+
+                st.markdown(f"**개장전★주요이슈 점검 Updated at ({datetime.now().strftime('%Y/%m/%d')})**")
+
+                st.markdown("**[시장 지표]**")
+                for k, v in st.session_state.market_data.items():
+                    st.markdown(f"* {k}: {v}")
+                st.write("---")
+
+                categories_data = st.session_state.news_data["results"]
+                for category, items in categories_data.items():
+                    if not items:
+                        continue
                     st.markdown(f"#### [{category}]")
-                    for item in items:
+                    for idx, item in enumerate(items):
                         title = item.get('title', '제목 없음') if isinstance(item, dict) else item
                         item_id = item.get('id') if isinstance(item, dict) else None
+
+                        if not item_id:
+                            for k, v in st.session_state.news_data["map"].items():
+                                if v['title'] == title or title in v['title']:
+                                    item_id = k
+                                    break
+                            if not item_id:
+                                item_id = f"fallback_{category}_{idx}"
+
                         title = re.sub(r'^\[.*?\]\s*', '', title).strip()
-                        
+
                         c_text, c_btn = st.columns([8.5, 1.5])
                         c_text.markdown(f"• {title}")
-                        if c_btn.button("내용보기", key=f"gen_{category}_{item_id}", use_container_width=True):
+                        # ✅ FIX #1 (계속): 내용보기 버튼도 동일하게 수정
+                        if c_btn.button("내용보기", key=f"btn_{category}_{idx}_{item_id}", use_container_width=True):
                             st.session_state.selected_news_id = item_id
                     st.write("")
 
-            with col_summary:
-                st.markdown("### 🧬 뉴스내용 간단히 요약")
-                sel_id = st.session_state.selected_news_id
-                if sel_id and sel_id in st.session_state.news_data["map"]:
-                    info = st.session_state.news_data["map"][sel_id]
-                    st.markdown(f"**🔗 [웹 브라우저에서 따로 열기]({info['url']})**\n\n**📰 기사 제목:** {info['title']}")
+            with col2:
+                st.markdown("### 뉴스내용 간단히 요약")
+                if st.session_state.selected_news_id and st.session_state.selected_news_id in st.session_state.news_data["map"]:
+                    selected_info = st.session_state.news_data["map"][st.session_state.selected_news_id]
+                    title   = selected_info['title']
+                    snippet = selected_info['snippet']
+                    url     = selected_info['url']
+
+                    st.markdown(f"**🔗 [웹 브라우저에서 원본 기사 따로 열기]({url})**")
+                    st.markdown(f"**📰 기사 제목:** {title}")
                     st.markdown("---")
-                    
-                    if sel_id not in st.session_state.news_data["summaries"]:
-                        with st.spinner("헤드라인에서 데이터 추출 중..."):
-                            summary_text = generate_headline_data_summary(info['title'], info['snippet'])
-                            st.session_state.news_data["summaries"][sel_id] = summary_text
-                    
-                    st.info(st.session_state.news_data["summaries"][sel_id])
+
+                    if st.session_state.selected_news_id not in st.session_state.news_data["summaries"]:
+                        with st.spinner("헤드라인에서 숫자와 통계를 뽑아내어 요약 중입니다..."):
+                            summary_text = generate_headline_data_summary(title, snippet)
+                            st.session_state.news_data["summaries"][st.session_state.selected_news_id] = summary_text
+
+                    st.info("💡 **헤드라인 기반 데이터 추출 결과**")
+                    st.write(st.session_state.news_data["summaries"][st.session_state.selected_news_id])
                 else:
-                    st.info("👈 왼쪽 리스트에서 [내용보기]를 클릭하세요.")
-        else:
-            st.info("👈 왼쪽 사이드바에서 '뉴스 가동' 버튼을 눌러주세요.")
+                    st.markdown('''
+                        <div style="padding: 2rem; background-color: #f8f9fa; border-radius: 10px; text-align: center; color: #6c757d;">
+                            👈 왼쪽 브리핑 보드에서 <b>[내용보기]</b> 버튼을 클릭해 보세요.<br>
+                            Gemini가 <b>"통계", "인용구", "숫자", "데이터"</b>를 포함하여 요약해 드립니다!
+                        </div>
+                    ''', unsafe_allow_html=True)
 
     # ------------------------------------------
-    # 탭 2: Alpha Vantage (Step 1 뼈대, Step 2에서 완성 예정)
+    # 탭 2: Alpha Vantage (Step 1 뼈대, Step 2 연결 대기)
     # ------------------------------------------
     with tab_alpha:
         if st.session_state.cmd_run_alpha:
@@ -450,45 +753,60 @@ def main():
             st.rerun()
 
         st.markdown("### 📈 글로벌 경제 감성(Sentiment) 분석 보드")
-        st.warning("🚀 현재 UI 독립성 테스트(Step 1)가 적용되었습니다. 사이드바의 버튼을 눌러도 다른 탭의 데이터가 초기화되지 않습니다. 준님의 승인 후 Step 2(Alpha Vantage API 로직 연결)를 진행합니다.")
+        st.warning("🚀 현재 V10.0 멀티태스킹 UI 뼈대가 완벽 적용되었습니다. \n사이드바 버튼을 마음껏 눌러 테스트해 보세요. 탭을 전환해도 일반 뉴스 데이터가 훼손되지 않습니다! \n준님의 승인이 떨어지면 이곳에 Alpha Vantage API 로직(Step 2)을 주입하겠습니다.")
 
     # ------------------------------------------
-    # 탭 3: 유튜브 (기존 V9.9 로직 탑재)
+    # 탭 3: 유튜브 (V9.9 100% 원상복구 탑재)
     # ------------------------------------------
     with tab_yt:
         if st.session_state.cmd_run_yt:
             ch_name = st.session_state.yt_data["channel_name"]
             ch_id = st.session_state.cmd_yt_channel_id
-            with st.spinner(f"📡 '{ch_name}' 채널 15시간 이내 영상 스캔 중..."):
+            
+            with st.spinner(f"📡 '{ch_name}' 채널의 최근 15시간 영상을 스캔합니다..."):
                 st.session_state.yt_data["videos"] = fetch_youtube_videos_15h(ch_id)
+            
             st.session_state.cmd_run_yt = False
             save_session_to_disk(st.session_state.market_data, st.session_state.news_data, st.session_state.alpha_data, st.session_state.yt_data)
             st.rerun()
 
-        if st.session_state.yt_data["videos"]:
-            st.markdown(f"### 📺 **{st.session_state.yt_data['channel_name']}** - 최근 업로드 영상")
+        st.markdown(f"### 📺 **{st.session_state.yt_data.get('channel_name', '')}** - 최근 15시간 업로드 영상")
+
+        if not st.session_state.yt_data["videos"]:
+            st.info("👈 왼쪽 사이드바에서 유튜브 채널 버튼을 눌러주세요.")
+        else:
             for item in st.session_state.yt_data["videos"]:
+                # ✅ FIX #5: videoId 안전하게 추출 → KeyError 방지
                 video_id = item.get('id', {}).get('videoId')
-                if not video_id: continue
-                
-                snippet = item['snippet']
-                title = sanitize_text(snippet['title'])
-                video_url = f"https://www.youtube.com/watch?v={video_id}"
-                
-                dt = datetime.strptime(snippet['publishedAt'], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=pytz.UTC).astimezone(pytz.timezone('Asia/Seoul'))
-                
+                if not video_id:
+                    continue  # videoId 없는 항목은 건너뜀
+
+                snippet      = item['snippet']
+                title        = sanitize_text(snippet['title'])
+                published_at = snippet['publishedAt']
+                thumb_url    = snippet['thumbnails']['high']['url']
+                video_url    = f"https://www.youtube.com/watch?v={video_id}"
+
+                dt = datetime.strptime(published_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=pytz.UTC).astimezone(pytz.timezone('Asia/Seoul'))
+                pretty_time = dt.strftime("%Y년 %m월 %d일 %H시 %M분")
+
                 with st.container():
                     col_img, col_info = st.columns([3, 7])
-                    col_img.image(snippet['thumbnails']['high']['url'])
+
+                    with col_img:
+                        st.image(thumb_url)
+
                     with col_info:
                         st.markdown(f"#### [{title}]({video_url})")
-                        st.markdown(f"🗓️ **업로드:** {dt.strftime('%Y년 %m월 %d일 %H시 %M분')}")
-                        if st.button("🧠 영상 내용 프리즘 요약하기", key=f"yt_btn_{video_id}", use_container_width=True):
-                            with st.spinner("AI가 영상을 해독 중입니다..."):
-                                st.write(extract_transcript_and_summarize(video_id, title, snippet['description']))
+                        st.markdown(f"🗓️ **업로드:** {pretty_time}")
+
+                        # ✅ FIX #1 (계속): 유튜브 요약 버튼도 동일하게 수정
+                        if st.button("🧠 영상 내용 프리즘 요약하기", key=f"yt_{video_id}", use_container_width=True):
+                            with st.spinner("뉴스프리즘 엔진이 유튜브 데이터를 해독 중입니다. (약 5~10초 소요)"):
+                                yt_summary = extract_transcript_and_summarize(video_id, title, snippet['description'])
+                                st.success("🎯 **AI 영상 핵심 요약 완료!**")
+                                st.write(yt_summary)
                 st.write("---")
-        else:
-            st.info("👈 왼쪽 사이드바에서 유튜브 채널 버튼을 눌러주세요.")
 
 if __name__ == "__main__":
     main()
