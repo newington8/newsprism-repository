@@ -341,7 +341,7 @@ def generate_headline_data_summary(title, snippet):
 # ==========================================
 # 📈 [NEW] Alpha Vantage 프리미엄 통신 로직 (V10.2 투 트랙 필터링 적용)
 # ==========================================
-def fetch_alpha_vantage_news(sector_name, start_idx, sort="RELEVANCE"):
+def fetch_alpha_vantage_news(sector_name, start_idx, sort="RELEVANCE", use_tickers=False):
     if not ALPHAVANTAGE_API_KEY:
         return "", {}, [], start_idx, False
 
@@ -353,22 +353,44 @@ def fetch_alpha_vantage_news(sector_name, start_idx, sort="RELEVANCE"):
         "정부 정책·규제": "economy_fiscal",
         "글로벌 지정학": "economy_politics"
     }
-    
-    topic = topic_map.get(sector_name)
-    if not topic:
-        return "", {}, [], start_idx, False
+
+    ticker_map = {
+        "글로벌 빅테크":  "NVDA,AAPL,MSFT,GOOGL,META,TSLA,AMZN",
+        "기업 실적·공시": "AAPL,MSFT,GOOGL,AMZN,META,NVDA,TSLA,JPM",
+        "거시경제 지표":  "SPY,TLT,GLD,USO,VIX",
+        "해외 증시·자산": "SPY,QQQ,DIA,GLD,BTC",
+        "정부 정책·규제": "XLF,XLE,JPM,GS,BAC",
+        "글로벌 지정학":  "XOM,CVX,LMT,RTX,BA,GLD"
+    }
 
     hours = get_lookback_hours(mode="alpha")
     time_from = (datetime.now(pytz.UTC) - timedelta(hours=hours)).strftime("%Y%m%dT%H%M")
     url = "https://www.alphavantage.co/query"
-    params = {
-        "function": "NEWS_SENTIMENT",
-        "topics": topic,
-        "time_from": time_from,
-        "limit": 30,
-        "sort": sort,
-        "apikey": ALPHAVANTAGE_API_KEY
-    }
+
+    if use_tickers:
+        tickers = ticker_map.get(sector_name)
+        if not tickers:
+            return "", {}, [], start_idx, False
+        params = {
+            "function": "NEWS_SENTIMENT",
+            "tickers": tickers,
+            "time_from": time_from,
+            "limit": 30,
+            "sort": sort,
+            "apikey": ALPHAVANTAGE_API_KEY
+        }
+    else:
+        topic = topic_map.get(sector_name)
+        if not topic:
+            return "", {}, [], start_idx, False
+        params = {
+            "function": "NEWS_SENTIMENT",
+            "topics": topic,
+            "time_from": time_from,
+            "limit": 30,
+            "sort": sort,
+            "apikey": ALPHAVANTAGE_API_KEY
+        }
 
     # 🛡️ 1.5차 필터링용 리스트 정의 (~100개 확장판)
     ALPHA_PREMIUM_PUBLISHERS = [
@@ -819,7 +841,7 @@ def render_tab_alpha_fragment(target_keywords, user_interest, default_keywords):
                 # 5개 미만이면 LATEST 정렬로 2차 호출 후 합산 재필터링
                 if len(curated_list) < 5:
                     ui_status_text.markdown(f"🔄 [{sector_name}] 뉴스 부족 ({len(curated_list)}개) → 추가 수집 중...")
-                    raw_context2, local_map2, local_tabloid2, alpha_idx, api_limit_hit2 = fetch_alpha_vantage_news(sector_name, alpha_idx, sort="LATEST")
+                    raw_context2, local_map2, local_tabloid2, alpha_idx, api_limit_hit2 = fetch_alpha_vantage_news(sector_name, alpha_idx, sort="RELEVANCE", use_tickers=True)
                     if api_limit_hit2:
                         timer_placeholder.empty()
                         ui_status_text.empty()
