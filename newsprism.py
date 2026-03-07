@@ -375,7 +375,7 @@ def fetch_alpha_vantage_news(sector_name, start_idx, sort="RELEVANCE", use_ticke
             "function": "NEWS_SENTIMENT",
             "tickers": tickers,
             "time_from": time_from,
-            "limit": 30,
+            "limit": 200,
             "sort": sort,
             "apikey": ALPHAVANTAGE_API_KEY
         }
@@ -387,7 +387,7 @@ def fetch_alpha_vantage_news(sector_name, start_idx, sort="RELEVANCE", use_ticke
             "function": "NEWS_SENTIMENT",
             "topics": topic,
             "time_from": time_from,
-            "limit": 30,
+            "limit": 200,
             "sort": sort,
             "apikey": ALPHAVANTAGE_API_KEY
         }
@@ -1001,7 +1001,7 @@ def render_tab_youtube_fragment():
 # 📌 메인 앱 렌더링
 # ==========================================
 def main():
-    st.set_page_config(page_title="News Prism V10.2", page_icon="💎", layout="wide")
+    st.set_page_config(page_title="News Prism V10.3", page_icon="💎", layout="wide")
 
     st.markdown("""
         <style>
@@ -1029,15 +1029,27 @@ def main():
                 f"""
                 <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 10px;">
                     <img src="data:image/png;base64,{data}" style="height: 200px; border-radius: 8px;">
-                    <h1 style="margin: 0; padding: 0; line-height: 1.2;"> 가나디: 신문배달 와써여~~ - V10.2 Two-Track Vanguard</h1>
+                    <h1 style="margin: 0; padding: 0; line-height: 1.2;"> 가나디: 신문배달 와써여~~ - V10.3</h1>
                 </div>
                 """, unsafe_allow_html=True
             )
     else:
-        st.title("💎 가나디의 신문배달 - V10.2 Two-Track Vanguard")
+        st.title("💎 가나디의 신문배달 - V10.3")
         st.info(f"💡 '{LOGO_PATH}' 파일을 찾을 수 없습니다. 이미지를 깃허브에 업로드해 주세요.")
 
     st.markdown("##### 🚀top10 섹션 헤드라인 + 📺유튜브 주요채널들")
+
+    with st.expander("📋 버전 히스토리", expanded=False):
+        st.markdown("""
+| 버전 | 업데이트 내용 |
+|------|-------------|
+| **V10.3** | Alpha Vantage 2차 요청 티커 기반으로 변경 (완전히 다른 뉴스 풀) |
+| **V10.2** | Alpha Vantage 투 트랙 필터링 (프리미엄/찌라시 분리), 탭 구조 + Fragment 도입 |
+| **V10.1** | 영어 뉴스 한국어 일괄 번역 엔진 추가 |
+| **V10.0** | 캐시 독립 서랍 구조 개편, 세션 상태 전면 재설계 |
+| **V9.7** | API 키 하드코딩 제거 (보안 강화), Triple Engine 복구 |
+        """)
+
     st.write("---")
 
     m_data, n_data, a_data, y_data = load_session_from_disk()
