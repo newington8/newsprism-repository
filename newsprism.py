@@ -17,14 +17,6 @@ import ast
 # 📌 [보안 강화] API 키 환경변수 / st.secrets 우선 로드
 # ==========================================
 # ✅ FIX #7: API 키 하드코딩 제거 → 환경변수 또는 Streamlit secrets 사용
-# 사용법: .streamlit/secrets.toml 파일에 키를 저장하거나 환경변수로 주입하세요.
-# 예시 secrets.toml:
-#   GEMINI_API_KEY = "실제_키_입력"
-#   NAVER_CLIENT_ID = "실제_키_입력"
-#   NAVER_CLIENT_SECRET = "실제_키_입력"
-#   NEWS_API_KEY = "실제_키_입력"
-#   YOUTUBE_API_KEY = "실제_키_입력"
-
 def _get_secret(key: str, fallback: str = "") -> str:
     """환경변수 → st.secrets → fallback 순으로 키를 로드합니다."""
     val = os.environ.get(key, "")
@@ -856,6 +848,11 @@ def main():
     if 'news_data' not in st.session_state: st.session_state.news_data = n_data
     if 'alpha_data' not in st.session_state: st.session_state.alpha_data = a_data
     if 'yt_data' not in st.session_state: st.session_state.yt_data = y_data
+
+    # 🚨 [✅ FIX: AttributeError 방지] UI 상태값 글로벌 초기화 누락 복구
+    if 'selected_news_id' not in st.session_state: st.session_state.selected_news_id = None
+    if 'selected_alpha_id' not in st.session_state: st.session_state.selected_alpha_id = None
+    if 'final_time_str' not in st.session_state: st.session_state.final_time_str = None
 
     # ==========================================
     # ⚙️ 사이드바 제어판 (통제실 역할로 전환)
