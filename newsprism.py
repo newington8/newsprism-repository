@@ -16,7 +16,6 @@ import ast
 # ==========================================
 # 📌 [보안 강화] API 키 환경변수 / st.secrets 우선 로드
 # ==========================================
-# ✅ FIX #7: API 키 하드코딩 제거 → 환경변수 또는 Streamlit secrets 사용
 def _get_secret(key: str, fallback: str = "") -> str:
     """환경변수 → st.secrets → fallback 순으로 키를 로드합니다."""
     val = os.environ.get(key, "")
@@ -40,7 +39,7 @@ ALPHAVANTAGE_API_KEY = _get_secret("ALPHAVANTAGE_API_KEY", "")
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ==========================================
-# 📌 캐시(백업) 시스템 (V10.0 독립 서랍 구조로 업그레이드)
+# 📌 캐시(백업) 시스템 (V10.2 독립 서랍 구조)
 # ==========================================
 CACHE_FILE = "prism_cache_v10.json"
 
@@ -64,12 +63,12 @@ def load_session_from_disk():
                 return (
                     data.get("market", {}), 
                     data.get("news_data", {"results": {}, "map": {}, "summaries": {}}),
-                    data.get("alpha_data", {"results": {}, "map": {}, "summaries": {}}),
+                    data.get("alpha_data", {"results": {}, "map": {}, "summaries": {}, "tabloid_results": []}),
                     data.get("yt_data", {"channel_name": "", "videos": [], "summaries": {}})
                 )
     except Exception as e:
         print(f"[Error] 캐시 로드 실패: {e}")
-    return {}, {"results": {}, "map": {}, "summaries": {}}, {"results": {}, "map": {}, "summaries": {}}, {"channel_name": "", "videos": [], "summaries": {}}
+    return {}, {"results": {}, "map": {}, "summaries": {}}, {"results": {}, "map": {}, "summaries": {}, "tabloid_results": []}, {"channel_name": "", "videos": [], "summaries": {}}
 
 # ==========================================
 # 📌 뉴스 엔진 및 유틸리티 로직
@@ -116,7 +115,6 @@ def get_market_indicators():
 
     for name, ticker_symbol in tickers.items():
         try:
-            # Finple과 완전히 동일한 객체 생성 및 기간(5d) 설정
             ticker = yf.Ticker(ticker_symbol)
             hist = ticker.history(period="5d")
             
@@ -124,11 +122,9 @@ def get_market_indicators():
                 valid_hist = hist.dropna(subset=['Close'])
                 
                 if len(valid_hist) >= 2:
-                    # Finple 로직 동일 적용 (iloc[-1], iloc[-2] 추출)
                     current_price = valid_hist['Close'].iloc[-1]
                     previous_close = valid_hist['Close'].iloc[-2]
                     
-                    # 스칼라 값 안전 변환 (pandas 버전 호환성 방어)
                     current_price = float(current_price.item() if hasattr(current_price, 'item') else current_price)
                     previous_close = float(previous_close.item() if hasattr(previous_close, 'item') else previous_close)
                     
@@ -151,7 +147,7 @@ def get_market_indicators():
 
     return indicators
 
-# 🚨 [원상복구 완료] 강력한 언론사 화이트리스트 필터링
+# 🚨 일반 뉴스용 (국내 중심) 언론사 화이트리스트
 def is_valid_article(title, publisher, link):
     if "포토" in title or "[사진]" in title or "M포토" in title:
         return False
@@ -191,7 +187,7 @@ def is_valid_article(title, publisher, link):
 
     return False
 
-# 🚀 단일 섹션 뉴스 수집 엔진 (트리플 엔진 완벽 복구)
+# 🚀 단일 섹션 뉴스 수집 엔진
 def fetch_single_sector_news(sector_name, search_query, start_idx):
     all_news_context = []
     news_map = {}
@@ -237,7 +233,7 @@ def fetch_single_sector_news(sector_name, search_query, start_idx):
     except Exception as e:
         print(f"[Error] 네이버 뉴스 수집 실패 ({sector_name}): {e}")
 
-    # 🚨 3. [원상복구 완료] NewsAPI 외신 수집 엔진
+    # 3. NewsAPI 외신 수집 엔진
     try:
         newsapi_url = "https://newsapi.org/v2/everything"
         newsapi_params = {"apiKey": NEWS_API_KEY, "q": search_query, "language": "ko", "sortBy": "publishedAt", "pageSize": 30}
@@ -266,7 +262,6 @@ def apply_prism_lens_single(sector_name, news_context, user_interest, target_kw)
     if not news_context.strip():
         return []
 
-    # ✅ FIX #2: raw_text를 함수 스코프 상단에 미리 초기화 → NameError 방지
     raw_text = ""
 
     prompt = f"""
@@ -302,10 +297,8 @@ def apply_prism_lens_single(sector_name, news_context, user_interest, target_kw)
             cleaned_text = json_match.group(0)
 
         try:
-            # 1차 시도: 표준 JSON 파싱
             return json.loads(cleaned_text)
         except json.JSONDecodeError:
-            # 2차 시도: AI가 홑따옴표를 썼을 경우 파이썬 기본 해석기(ast)로 강제 파싱 구출
             return ast.literal_eval(cleaned_text)
 
     except Exception as e:
@@ -326,13 +319,12 @@ def generate_headline_data_summary(title, snippet):
         return f"요약 생성 중 오류 발생: {e}"
 
 # ==========================================
-# 📈 [NEW] Alpha Vantage 프리미엄 통신 로직 (V10.1 출처 표시 추가)
+# 📈 [NEW] Alpha Vantage 프리미엄 통신 로직 (V10.2 투 트랙 필터링 적용)
 # ==========================================
 def fetch_alpha_vantage_news(sector_name, start_idx):
     if not ALPHAVANTAGE_API_KEY:
-        return "", {}, start_idx
+        return "", {}, [], start_idx
 
-    # Alpha Vantage 전용 토픽 매핑
     topic_map = {
         "글로벌 빅테크": "technology",
         "기업 실적·공시": "earnings",
@@ -344,7 +336,7 @@ def fetch_alpha_vantage_news(sector_name, start_idx):
     
     topic = topic_map.get(sector_name)
     if not topic: 
-        return "", {}, start_idx # 매핑되지 않은 섹션은 패스
+        return "", {}, [], start_idx
 
     time_from = (datetime.now(pytz.UTC) - timedelta(hours=15)).strftime("%Y%m%dT%H%M")
     url = "https://www.alphavantage.co/query"
@@ -356,8 +348,24 @@ def fetch_alpha_vantage_news(sector_name, start_idx):
         "apikey": ALPHAVANTAGE_API_KEY
     }
 
+    # 🛡️ 1.5차 필터링용 리스트 정의
+    ALPHA_PREMIUM_PUBLISHERS = [
+        "reuters", "bloomberg", "apnews", "afp", "wsj", "ft.com", "cnbc",
+        "economist", "marketwatch", "barrons", "forbes", "fortune", "nytimes",
+        "washingtonpost", "bbc", "cnn", "theguardian", "time", "businessinsider",
+        "finance.yahoo", "investing.com", "techcrunch", "wired", "foxbusiness",
+        "thestreet", "investors", "morningstar", "nikkei", "scmp", "theverge",
+        "arstechnica", "engadget", "zdnet", "technologyreview", "coindesk",
+        "cointelegraph", "decrypt", "npr", "usatoday", "aljazeera"
+    ]
+    
+    ALPHA_TABLOID_PUBLISHERS = [
+        "fool", "motley fool", "benzinga", "zacks", "seeking alpha", "seekingalpha", "zerohedge"
+    ]
+
     news_map = {}
     context_list = []
+    tabloid_list = [] # 찌라시 전용 분리수거함
     idx = start_idx
     
     try:
@@ -366,27 +374,41 @@ def fetch_alpha_vantage_news(sector_name, start_idx):
             data = res.json()
             if "Information" in data or "Note" in data:
                 print(f"[Alpha Vantage] API Limit Reached: {data}")
-                return "", {}, start_idx
+                return "", {}, [], start_idx
 
             feed = data.get("feed", [])
             for item in feed:
+                source_domain = item.get("source_domain", "External").lower()
+                
+                # 출처 검사 로직
+                is_premium = any(p in source_domain for p in ALPHA_PREMIUM_PUBLISHERS)
+                is_tabloid = any(t in source_domain for t in ALPHA_TABLOID_PUBLISHERS)
+                
+                # 둘 다 해당하지 않는 잡다한 매체는 아예 버림
+                if not is_premium and not is_tabloid:
+                    continue
+
                 sentiment = item.get("overall_sentiment_label", "Neutral")
-                # [V10.1] 출처 도메인 파싱 및 태깅 추가
-                source_domain = item.get("source_domain", "External")
-                # 감성 라벨과 출처를 모두 포함하여 제목 조립
-                clean_title = f"[{sentiment}] [{source_domain}] {sanitize_text(item.get('title', ''))}"
+                clean_title = f"[{sentiment}] [{item.get('source_domain', 'External')}] {sanitize_text(item.get('title', ''))}"
                 n_id = f"A{idx}"
+                
                 news_map[n_id] = {
                     "url": item.get('url', ''), 
                     "title": clean_title, 
                     "snippet": sanitize_text(item.get('summary', ''))
                 }
-                context_list.append(f"[ID:{n_id}] {clean_title}")
+                
+                # 투 트랙 라우팅
+                if is_tabloid:
+                    tabloid_list.append({"id": n_id, "title": clean_title})
+                else: # is_premium
+                    context_list.append(f"[ID:{n_id}] {clean_title}")
+                
                 idx += 1
     except Exception as e:
         print(f"[Error] Alpha Vantage 통신 실패: {e}")
         
-    return "\n".join(context_list), news_map, idx
+    return "\n".join(context_list), news_map, tabloid_list, idx
 
 # 🇰🇷 [V10.1] 지연 번역(Lazy Translation) 전용 엔진
 def translate_english_to_korean(text):
@@ -402,7 +424,7 @@ def translate_english_to_korean(text):
         return response.text.strip()
     except Exception as e:
         print(f"[Error] 제목 번역 실패: {e}")
-        return text # 번역 실패 시 원문이라도 표시하는 방어 로직
+        return text 
 
 # ==========================================
 # 📺 yt-dlp 기반 유튜브 엔진
@@ -465,7 +487,6 @@ def extract_transcript_and_summarize(video_id, title, description):
         elif auto_subs and 'en' in auto_subs:     target_sub = auto_subs['en']
 
         if target_sub:
-            # ✅ FIX #6: next()에 기본값 None 적용 + target_sub 빈 리스트 방어 처리 (원상복구 완)
             json3_url = next((fmt['url'] for fmt in target_sub if fmt.get('ext') == 'json3'), None)
             if not json3_url and target_sub:
                 json3_url = target_sub[0].get('url')
@@ -477,7 +498,6 @@ def extract_transcript_and_summarize(video_id, title, description):
                         data = sub_resp.json()
                         events = data.get('events', [])
                         texts = []
-                        # [원상복구 완료] 강제 축약된 컴프리헨션을 오리지널 for loop 구조로 100% 되돌림
                         for event in events:
                             if 'segs' in event:
                                 for seg in event['segs']:
@@ -521,13 +541,11 @@ def extract_transcript_and_summarize(video_id, title, description):
 def render_tab_news_fragment(target_keywords, user_interest, default_keywords):
     """일반 뉴스 수집 및 렌더링을 담당하는 완전히 독립된 구역"""
     col_run, col_stop = st.columns(2)
-    # 버튼이 프래그먼트 내부에 위치해야 해당 탭만 리렌더링 됩니다.
     if col_run.button("🚀 뉴스 가동", type="primary", use_container_width=True, key="btn_run_general_news"):
         st.session_state.news_data = {"results": {}, "map": {}, "summaries": {}}
         st.session_state.selected_news_id = None
         start_time = time.time()
 
-        # [원상복구 완료] JS 기반 실시간 타이머 완벽 복원
         timer_placeholder = st.empty()
         with timer_placeholder:
             components.html(
@@ -549,13 +567,12 @@ def render_tab_news_fragment(target_keywords, user_interest, default_keywords):
             )
 
         ui_status_text = st.empty()
-        ui_progress_bar = st.progress(0) # [원상복구 완료] 진행률 바
+        ui_progress_bar = st.progress(0) 
 
         st.markdown("### 📋 오늘의 텍스트 브리핑 (실시간 로딩 중... ⏳)")
         market_ph = st.empty()
         market_ph.info("📈 글로벌 마켓 지표를 스캔하고 있습니다...")
 
-        # 0. 시장 지표 스캔
         st.session_state.market_data = get_market_indicators()
         market_str = " | ".join([f"{k}: {v}" for k, v in st.session_state.market_data.items()])
         market_ph.success(f"**[시장 지표]** {market_str}")
@@ -563,7 +580,6 @@ def render_tab_news_fragment(target_keywords, user_interest, default_keywords):
         sectors_keys = list(target_keywords.keys())
         sector_containers = {sec: st.empty() for sec in sectors_keys}
         
-        # ✅ FIX #4: current_article_idx는 반드시 버튼 블록 내부에서만 초기화
         current_article_idx = 1
         
         for idx, sector_name in enumerate(sectors_keys):
@@ -601,7 +617,6 @@ def render_tab_news_fragment(target_keywords, user_interest, default_keywords):
         st.error("🚫 브리핑 가동이 취소되었습니다.")
         st.stop()
 
-    # --- 화면 렌더링 뷰어 파트 ---
     if not st.session_state.news_data["results"]:
         st.info("👆 위쪽의 '🚀 뉴스 가동' 버튼을 눌러주세요.")
     else:
@@ -609,7 +624,6 @@ def render_tab_news_fragment(target_keywords, user_interest, default_keywords):
         with col1:
             st.markdown("### 📋 가나디의 뉴스가져오기 완료!!")
             st.success("우측의 [내용보기] 버튼을 누르면 요약창이 뜹니다.")
-            # [원상복구 완료] 브리핑 소요 시간 표출 복구
             if st.session_state.get('final_time_str'):
                 st.markdown(f"**⏱️ 브리핑 조립 소요 시간:** `{st.session_state.final_time_str}`")
 
@@ -641,7 +655,6 @@ def render_tab_news_fragment(target_keywords, user_interest, default_keywords):
                     
                     c_text, c_btn = st.columns([8.5, 1.5])
                     c_text.markdown(f"• {title}")
-                    # ✅ FIX #1 (계속): 내용보기 버튼도 동일하게 수정
                     if c_btn.button("내용보기", key=f"btn_gen_{category}_{idx}_{item_id}", use_container_width=True):
                         st.session_state.selected_news_id = item_id
                 st.write("")
@@ -682,11 +695,10 @@ def render_tab_alpha_fragment(target_keywords, user_interest, default_keywords):
             st.error("🚨 Alpha Vantage API 키가 등록되지 않았습니다. Secrets를 확인해주세요.")
             return
 
-        st.session_state.alpha_data = {"results": {}, "map": {}, "summaries": {}}
+        st.session_state.alpha_data = {"results": {}, "map": {}, "summaries": {}, "tabloid_results": []}
         st.session_state.selected_alpha_id = None
         start_time = time.time()
         
-        # [V10.1] Alpha 전용 JS 실시간 타이머 도입
         timer_placeholder = st.empty()
         with timer_placeholder:
             components.html(
@@ -716,52 +728,55 @@ def render_tab_alpha_fragment(target_keywords, user_interest, default_keywords):
             search_query = target_kw if target_kw else default_keywords[sector_name]
             
             ui_status_text.markdown(f"🔍 [{sector_name}] 감성 분석 스캔 중...")
-            raw_context, local_map, alpha_idx = fetch_alpha_vantage_news(sector_name, alpha_idx)
+            raw_context, local_map, local_tabloid, alpha_idx = fetch_alpha_vantage_news(sector_name, alpha_idx)
             
+            # 찌라시 분리수거 및 번역 저장 (Gemini 10개 필터링을 거치지 않음)
+            if local_tabloid:
+                ui_status_text.markdown(f"🗑️ [{sector_name}] 찌라시 분리수거 및 번역 중...")
+                for t_item in local_tabloid:
+                    t_eng_title = t_item['title']
+                    t_kor_title = translate_english_to_korean(t_eng_title)
+                    t_item['title'] = t_kor_title
+                    if t_item['id'] in local_map:
+                        local_map[t_item['id']]['title'] = t_kor_title
+                st.session_state.alpha_data["tabloid_results"].extend(local_tabloid)
+            
+            # 프리미엄 1티어 뉴스 AI 필터링 진행
             if raw_context:
-                ui_status_text.markdown(f"🧠 [{sector_name}] AI 필터링 및 **한국어 번역 중...**")
-                # 1차 필터링: 영어 원문으로 10개 추리기
+                ui_status_text.markdown(f"🧠 [{sector_name}] AI 엘리트 필터링 및 **한국어 번역 중...**")
                 curated_list = apply_prism_lens_single(sector_name, raw_context, user_interest, search_query)
                 
-                # 2차 작업: 지연 번역 (선별된 기사만 번역)
                 translated_list = []
                 for item in curated_list:
                     eng_title = item.get('title', '')
                     item_id = item.get('id', '')
                     
                     if eng_title:
-                        # 한국어로 번역 실행
                         kor_title = translate_english_to_korean(eng_title)
-                        
-                        # 화면에 보여줄 번역본 리스트 저장
                         translated_list.append({"id": item_id, "title": kor_title})
                         
-                        # news_map 내부의 데이터도 한국어로 교체 (심층분석 시 한국어 표시 목적)
                         if item_id in local_map:
                             local_map[item_id]['title'] = kor_title
                 
                 st.session_state.alpha_data["map"].update(local_map)
                 st.session_state.alpha_data["results"][sector_name] = translated_list
         
-        # 타이머 종료 및 시간 기록
         elapsed = int(time.time() - start_time)
         mins, secs = divmod(elapsed, 60)
         st.session_state.final_alpha_time_str = f"{mins:02d}분 {secs:02d}초"
         
         timer_placeholder.empty()
         ui_status_text.empty()
-        st.success("✨ Alpha Vantage 프리미엄 분석 및 번역 완료!")
+        st.success("✨ Alpha Vantage 프리미엄 분석 및 찌라시 분리 완료!")
         
         save_session_to_disk(st.session_state.market_data, st.session_state.news_data, st.session_state.alpha_data, st.session_state.yt_data)
 
-    # --- Alpha Vantage 뷰어 ---
     if not st.session_state.alpha_data["results"]:
         st.info("👆 위의 '💎 Alpha Vantage 프리미엄 가동' 버튼을 눌러주세요.")
     else:
         c1, c2 = st.columns([1, 1])
         with c1:
-            st.markdown("### 📈 글로벌 감성(Sentiment) 브리핑")
-            # [V10.1] 알파 탭 전용 소요 시간 출력
+            st.markdown("### 📈 글로벌 프리미엄 브리핑")
             if st.session_state.get('final_alpha_time_str'):
                 st.markdown(f"**⏱️ 프리미엄 브리핑 소요 시간:** `{st.session_state.final_alpha_time_str}`")
             st.write("---")
@@ -774,10 +789,23 @@ def render_tab_alpha_fragment(target_keywords, user_interest, default_keywords):
                     title = item.get('title', '제목 없음') if isinstance(item, dict) else item
                     item_id = item.get('id') if isinstance(item, dict) else f"fallback_alpha_{idx}"
                     
-                    # 배지가 포함된 타이틀 출력
                     c_text, c_btn = st.columns([8.5, 1.5])
                     c_text.markdown(f"• {title}")
                     if c_btn.button("심층분석", key=f"btn_alp_{category}_{item_id}", use_container_width=True):
+                        st.session_state.selected_alpha_id = item_id
+                st.write("")
+            
+            # 🚨 찌라시 전용 렌더링 구역 (10대 섹션이 끝난 하단에 배치)
+            if st.session_state.alpha_data.get("tabloid_results"):
+                st.write("---")
+                st.markdown("#### 🚨 [주의] 오늘의 찌라시 & 가십성 리포트 모아보기")
+                for idx, item in enumerate(st.session_state.alpha_data["tabloid_results"]):
+                    title = item.get('title', '제목 없음')
+                    item_id = item.get('id')
+                    
+                    c_text, c_btn = st.columns([8.5, 1.5])
+                    c_text.markdown(f"• {title}")
+                    if c_btn.button("심층분석", key=f"btn_alp_tabloid_{idx}_{item_id}", use_container_width=True):
                         st.session_state.selected_alpha_id = item_id
                 st.write("")
         
@@ -812,7 +840,6 @@ def render_tab_youtube_fragment():
     }
 
     st.markdown("##### 📺 분석하고 싶은 채널을 선택하세요")
-    # [원상복구 완료] 오리지널 코드처럼 글자 깨짐 방지를 위해 버튼을 세로로 나열 (columns 사용 안함)
     for ch_name, ch_id in yt_channels.items():
         if st.button(f"▶️ {ch_name}", use_container_width=True, key=f"yt_ch_btn_{ch_id}"):
             with st.spinner(f"📡 '{ch_name}' 채널의 최근 15시간 영상을 스캔합니다..."):
@@ -827,7 +854,6 @@ def render_tab_youtube_fragment():
     else:
         st.markdown(f"### 📺 **{st.session_state.yt_data.get('channel_name', '')}** - 최근 15시간 업로드 영상")
         for item in st.session_state.yt_data["videos"]:
-            # ✅ FIX #5: videoId 안전하게 추출 → KeyError 방지
             video_id = item.get('id', {}).get('videoId')
             if not video_id: 
                 continue
@@ -851,14 +877,12 @@ def render_tab_youtube_fragment():
                     st.markdown(f"#### [{title}]({video_url})")
                     st.markdown(f"🗓️ **업로드:** {pretty_time}")
 
-                    # ✅ FIX #1 (계속): 유튜브 요약 버튼도 동일하게 수정
                     if st.button("🧠 영상 내용 프리즘 요약하기", key=f"yt_sum_btn_{video_id}", use_container_width=True):
                         with st.spinner("뉴스프리즘 엔진이 유튜브 데이터를 해독 중입니다. (약 5~10초 소요)"):
                             summary = extract_transcript_and_summarize(video_id, title, snippet['description'])
                             st.session_state.yt_data["summaries"][video_id] = summary
                             save_session_to_disk(st.session_state.market_data, st.session_state.news_data, st.session_state.alpha_data, st.session_state.yt_data)
                     
-                    # 요약이 존재하면 바로 출력 (프래그먼트 새로고침 시 데이터 유지)
                     if video_id in st.session_state.yt_data.get("summaries", {}):
                         st.success("🎯 **AI 영상 핵심 요약 완료!**")
                         st.write(st.session_state.yt_data["summaries"][video_id])
@@ -869,9 +893,8 @@ def render_tab_youtube_fragment():
 # 📌 메인 앱 렌더링
 # ==========================================
 def main():
-    st.set_page_config(page_title="News Prism V10.0", page_icon="💎", layout="wide")
+    st.set_page_config(page_title="News Prism V10.2", page_icon="💎", layout="wide")
 
-    # [원상복구 완료] 탭 구조 내부에서도 Sticky 적용이 유지되도록 CSS 완벽 복구
     st.markdown("""
         <style>
             .main, .main .block-container { overflow: visible !important; }
@@ -889,9 +912,6 @@ def main():
         </style>
     """, unsafe_allow_html=True)
 
-    # ------------------------------------------
-    # 🖼️ [V9.9 Upgrade] 텍스트 이모지 -> PNG 로고 교체 로직 (원상복구)
-    # ------------------------------------------
     LOGO_PATH = "newsprismdog.png"
     if os.path.exists(LOGO_PATH):
         import base64
@@ -901,35 +921,34 @@ def main():
                 f"""
                 <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 10px;">
                     <img src="data:image/png;base64,{data}" style="height: 200px; border-radius: 8px;">
-                    <h1 style="margin: 0; padding: 0; line-height: 1.2;"> 가나디: 신문배달 와써여~~ - V10.1 Alpha Vanguard</h1>
+                    <h1 style="margin: 0; padding: 0; line-height: 1.2;"> 가나디: 신문배달 와써여~~ - V10.2 Two-Track Vanguard</h1>
                 </div>
                 """, unsafe_allow_html=True
             )
     else:
-        st.title("💎 가나디의 신문배달 - V10.1 Alpha Vanguard")
+        st.title("💎 가나디의 신문배달 - V10.2 Two-Track Vanguard")
         st.info(f"💡 '{LOGO_PATH}' 파일을 찾을 수 없습니다. 이미지를 깃허브에 업로드해 주세요.")
 
     st.markdown("##### 🚀top10 섹션 헤드라인 + 📺유튜브 주요채널들")
     st.write("---")
 
-    # ==========================================
-    # ⚙️ [V10.0] 상태 관리 (독립 서랍 구조 완벽 로드)
-    # ==========================================
     m_data, n_data, a_data, y_data = load_session_from_disk()
     if 'market_data' not in st.session_state: st.session_state.market_data = m_data
     if 'news_data' not in st.session_state: st.session_state.news_data = n_data
-    if 'alpha_data' not in st.session_state: st.session_state.alpha_data = a_data
+    
+    # 🚨 V10.2 찌라시 보관함 글로벌 초기화
+    if 'alpha_data' not in st.session_state: 
+        st.session_state.alpha_data = a_data
+    if 'tabloid_results' not in st.session_state.alpha_data:
+        st.session_state.alpha_data['tabloid_results'] = []
+        
     if 'yt_data' not in st.session_state: st.session_state.yt_data = y_data
 
-    # 🚨 [✅ FIX: AttributeError 방지] UI 상태값 글로벌 초기화 누락 복구
     if 'selected_news_id' not in st.session_state: st.session_state.selected_news_id = None
     if 'selected_alpha_id' not in st.session_state: st.session_state.selected_alpha_id = None
     if 'final_time_str' not in st.session_state: st.session_state.final_time_str = None
     if 'final_alpha_time_str' not in st.session_state: st.session_state.final_alpha_time_str = None
 
-    # ==========================================
-    # ⚙️ 사이드바 제어판 (통제실 역할로 전환)
-    # ==========================================
     st.sidebar.header("⚙️ 고급 설정")
     st.sidebar.info("💡 V10.0 업데이트: 사이드바의 가동 버튼들이 각 탭 내부로 이사했습니다! 탭을 넘나들며 동시에 여러 기능을 실행해 보세요.")
     
@@ -939,7 +958,6 @@ def main():
         height=100
     )
 
-    # [원상복구 완료] 10대 섹션별 키워드 타겟팅 입력창 전체 복원
     with st.sidebar.expander("🎯 10대 섹션별 키워드 타겟팅", expanded=False):
         t1  = st.text_input("① 국내 대장주",    placeholder="예: LG에너지솔루션")
         t2  = st.text_input("② 글로벌 빅테크",  placeholder="예: 메타")
@@ -972,12 +990,8 @@ def main():
         "글로벌 지정학":  "미중 OR 관세 OR 중동 OR 트럼프 OR 공급망"
     }
 
-    # ==========================================
-    # 🖥️ 3단 독립 탭 (V10.0 멀티태스킹 레이아웃)
-    # ==========================================
     tab_news, tab_alpha, tab_yt = st.tabs(["📰 일반 뉴스 브리핑", "📈 Alpha Vantage 프리미엄", "📺 유튜브 인사이트"])
 
-    # 각각의 프래그먼트 함수를 호출하여 탭 내부에 렌더링
     with tab_news:
         render_tab_news_fragment(target_keywords, user_interest, default_keywords)
 
