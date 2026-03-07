@@ -998,6 +998,402 @@ def render_tab_youtube_fragment():
 
 
 # ==========================================
+# 📌 Alpha Vantage MCP 탭
+# ==========================================
+def render_tab_mcp_fragment():
+    """Alpha Vantage MCP 탭 - 탭 진입 시 자동 로딩"""
+    import time as _time
+    import io, csv
+    AV_BASE = "https://www.alphavantage.co/query"
+
+    def av_get(params):
+        p = dict(params)
+        p["apikey"] = ALPHAVANTAGE_API_KEY
+        try:
+            r = requests.get(AV_BASE, params=p, timeout=15)
+            return r.json()
+        except Exception as e:
+            return {"error": str(e)}
+
+    def av_get_text(params):
+        p = dict(params)
+        p["apikey"] = ALPHAVANTAGE_API_KEY
+        try:
+            r = requests.get(AV_BASE, params=p, timeout=20)
+            return r.text
+        except Exception as e:
+            return None
+
+    # ── 세션 초기화 ──
+    for _k, _v in [
+        ('mcp_gainers', None), ('mcp_macro', None), ('mcp_commodities', None),
+        ('mcp_earnings_cal', None), ('mcp_last_loaded', 0),
+        ('mcp_insider', {}), ('mcp_transcript', {}), ('mcp_ticker_names', {}),
+    ]:
+        if _k not in st.session_state:
+            st.session_state[_k] = _v
+
+    def _parse_comm_csv(text):
+        """원자재 CSV 응답 → {"data": [{date, value}, ...]} 형식 변환"""
+        rows = []
+        for line in (text or "").splitlines()[1:]:
+            parts = line.split(',')
+            if len(parts) == 2:
+                val = parts[1].strip()
+                if val and val != '.':
+                    rows.append({"date": parts[0].strip(), "value": val})
+        return {"data": rows}
+
+    def _yahoo_name(ticker):
+        """Yahoo Finance 검색으로 종목명 조회 (timeout 3초)"""
+        try:
+            r = requests.get(
+                "https://query2.finance.yahoo.com/v1/finance/search",
+                params={"q": ticker, "quotesCount": 1, "newsCount": 0, "enableFuzzyQuery": False},
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=3
+            )
+            quotes = r.json().get("quotes", [])
+            if quotes and quotes[0].get("symbol", "").upper() == ticker.upper():
+                return ticker, (quotes[0].get("shortname") or quotes[0].get("longname") or ticker)
+        except Exception:
+            pass
+        return ticker, ticker
+
+    # ── 자동 로딩: 첫 진입 또는 5분 경과 시 ──
+    CACHE_TTL = 300
+    needs_load = (
+        st.session_state.mcp_gainers is None or
+        (_time.time() - st.session_state.mcp_last_loaded) > CACHE_TTL
+    )
+    if needs_load:
+        with st.spinner("📡 Alpha Vantage 데이터 로딩 중... (잠시만 기다려 주세요)"):
+            st.session_state.mcp_gainers      = av_get({"function": "TOP_GAINERS_LOSERS"})
+            def _fred_csv(series_id):
+                """FRED 공개 CSV 데이터 (API 키 불필요)"""
+                try:
+                    r = requests.get(
+                        "https://fred.stlouisfed.org/graph/fredgraph.csv",
+                        params={"id": series_id}, timeout=10
+                    )
+                    rows = []
+                    for line in r.text.splitlines()[1:]:
+                        parts = line.split(',')
+                        if len(parts) == 2 and parts[1].strip() not in ('.', ''):
+                            rows.append({"date": parts[0].strip(), "value": parts[1].strip()})
+                    return {"data": rows}
+                except Exception:
+                    return {"data": []}
+
+            st.session_state.mcp_macro        = {
+                "cpi":          av_get({"function": "CPI",                "interval": "monthly"}),
+                "ppi":          _fred_csv("PPIACO"),
+                "ffr":          av_get({"function": "FEDERAL_FUNDS_RATE", "interval": "monthly"}),
+                "unemployment": av_get({"function": "UNEMPLOYMENT"}),
+                "nfp":          av_get({"function": "NONFARM_PAYROLL"}),
+            }
+            st.session_state.mcp_commodities  = {
+                "wti":    _parse_comm_csv(av_get_text({"function": "WTI",         "interval": "daily"})),
+                "brent":  _parse_comm_csv(av_get_text({"function": "BRENT",       "interval": "daily"})),
+                "gold":   av_get({"function": "GOLD_SILVER_SPOT"}),
+                "copper": av_get({"function": "COPPER",      "interval": "monthly"}),
+                "ng":     _parse_comm_csv(av_get_text({"function": "NATURAL_GAS", "interval": "daily"})),
+            }
+            st.session_state.mcp_earnings_cal = av_get_text({"function": "EARNINGS_CALENDAR", "horizon": "3month"})
+
+            # ── 종목명 병렬 조회 (Yahoo Finance) ──
+            _raw = st.session_state.mcp_gainers or {}
+            _all_tickers = list({
+                item['ticker']
+                for _lst in ['top_gainers', 'top_losers', 'most_actively_traded']
+                for item in _raw.get(_lst, [])[:10]
+            })
+            _unknown = [t for t in _all_tickers if t not in st.session_state.mcp_ticker_names]
+            if _unknown:
+                from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _asc
+                _ex = _TPE(max_workers=10)
+                _futs = {_ex.submit(_yahoo_name, t): t for t in _unknown}
+                _ex.shutdown(wait=False)
+                try:
+                    for _f in _asc(_futs, timeout=8):
+                        try:
+                            _t, _nm = _f.result()
+                            st.session_state.mcp_ticker_names[_t] = _nm
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                for t in _unknown:
+                    st.session_state.mcp_ticker_names.setdefault(t, t)
+
+            st.session_state.mcp_last_loaded  = _time.time()
+
+    # ── 헤더 ──
+    last_dt = datetime.fromtimestamp(st.session_state.mcp_last_loaded, tz=pytz.timezone('Asia/Seoul'))
+    st.markdown("### 🚀 Alpha Vantage 실시간 마켓 대시보드")
+    st.caption(f"🕐 마지막 업데이트: {last_dt.strftime('%Y-%m-%d %H:%M')} KST  ·  5분마다 자동 갱신")
+    st.write("---")
+
+    # ── 섹션 1: TOP GAINERS / LOSERS / MOST ACTIVE ────────────
+    st.markdown("#### 📊 TOP GAINERS / LOSERS / MOST ACTIVE")
+    data = st.session_state.mcp_gainers or {}
+    if "Information" in data:
+        st.warning(data["Information"])
+    elif "error" in data:
+        st.error(data["error"])
+    else:
+        _names = st.session_state.get('mcp_ticker_names', {})
+
+        def _fmt_vol(v):
+            try:
+                v = int(v)
+                return f"{v/1e6:.1f}M" if v >= 1e6 else f"{v/1e3:.0f}K"
+            except Exception:
+                return str(v)
+
+        def _render_items(items):
+            for item in items[:10]:
+                ticker = item['ticker']
+                name   = _names.get(ticker, ticker)
+                pct    = item.get("change_percentage", "")
+                price  = item['price']
+                vol    = _fmt_vol(item.get('volume', ''))
+                label  = name if name != ticker else ticker
+                st.markdown(f"**{label}**  \n`{ticker}` · ${price} · `{pct}` · {vol}")
+
+        col_g, col_l, col_a = st.columns(3)
+        with col_g:
+            st.markdown("**🟢 Top Gainers**")
+            _render_items(data.get("top_gainers", []))
+        with col_l:
+            st.markdown("**🔴 Top Losers**")
+            _render_items(data.get("top_losers", []))
+        with col_a:
+            st.markdown("**🔵 Most Active**")
+            _render_items(data.get("most_actively_traded", []))
+    st.write("---")
+
+    # ── 섹션 2: 거시경제 지표 ──────────────────────────────────
+    st.markdown("#### 🏦 거시경제 지표")
+    macro = st.session_state.mcp_macro or {}
+
+    def _latest(d):
+        return (d.get("data") or [{}])[0]
+
+    def _pct_chg(d, periods):
+        """periods개월 전 대비 % 변화율"""
+        items = d.get("data") or []
+        if len(items) > periods:
+            try:
+                curr = float(items[0]['value'])
+                prev = float(items[periods]['value'])
+                if prev:
+                    return f"{(curr - prev) / prev * 100:+.2f}%"
+            except Exception:
+                pass
+        return "N/A"
+
+    def _abs_delta(d):
+        items = d.get("data") or []
+        if len(items) >= 2:
+            try:
+                return f"{float(items[0]['value']) - float(items[1]['value']):+.2f}"
+            except Exception:
+                return None
+        return None
+
+    if macro:
+        # ── CPI / PPI (전월비 · 전년비) ──
+        col1, col2, col3, col4 = st.columns(4)
+        cpi = macro.get("cpi", {})
+        ppi = macro.get("ppi", {})
+        with col1:
+            l = _latest(cpi)
+            st.metric("🏷️ CPI 전월비", _pct_chg(cpi, 1), help=f"소비자물가지수 | 기준일: {l.get('date','')}")
+        with col2:
+            l = _latest(cpi)
+            st.metric("🏷️ CPI 전년비", _pct_chg(cpi, 12), help=f"소비자물가지수 | 기준일: {l.get('date','')}")
+        with col3:
+            l = _latest(ppi)
+            st.metric("🏭 PPI 전월비", _pct_chg(ppi, 1), help=f"생산자물가지수 (FRED PPIACO) | 기준일: {l.get('date','')}")
+        with col4:
+            l = _latest(ppi)
+            st.metric("🏭 PPI 전년비", _pct_chg(ppi, 12), help=f"생산자물가지수 (FRED PPIACO) | 기준일: {l.get('date','')}")
+
+        st.write("")
+
+        # ── 연방기금금리 / 실업률 / 비농업고용 ──
+        col5, col6, col7 = st.columns(3)
+        with col5:
+            l = _latest(macro.get("ffr", {}))
+            st.metric("🏦 연방기금금리", f"{l.get('value','N/A')}%",
+                      delta=_abs_delta(macro.get("ffr", {})), help=f"기준일: {l.get('date','')}")
+        with col6:
+            l = _latest(macro.get("unemployment", {}))
+            st.metric("👷 실업률", f"{l.get('value','N/A')}%",
+                      delta=_abs_delta(macro.get("unemployment", {})), help=f"기준일: {l.get('date','')}")
+        with col7:
+            l = _latest(macro.get("nfp", {}))
+            try:
+                val_k = f"{float(l.get('value', 0)) / 1000:.0f}K"
+            except Exception:
+                val_k = l.get("value", "N/A")
+            st.metric("💼 비농업고용", val_k,
+                      delta=_abs_delta(macro.get("nfp", {})), help=f"기준일: {l.get('date','')}")
+    st.write("---")
+
+    # ── 섹션 3: 원자재 시세판 ──────────────────────────────────
+    st.markdown("#### 🛢️ 원자재 시세판")
+    comm = st.session_state.mcp_commodities or {}
+
+    def _comm_latest(d):
+        return (d.get("data") or [{}])[0]
+
+    def _comm_delta(d):
+        items = d.get("data") or []
+        if len(items) >= 2:
+            try:
+                return f"{float(items[0]['value']) - float(items[1]['value']):+.2f}"
+            except Exception:
+                return None
+        return None
+
+    if comm:
+        col1, col2, col3, col4, col5 = st.columns(5)
+        with col1:
+            l = _comm_latest(comm.get("wti", {}))
+            st.metric("🛢️ WTI ($/배럴)", f"${l.get('value','N/A')}", help=f"기준일: {l.get('date','')}")
+        with col2:
+            l = _comm_latest(comm.get("brent", {}))
+            st.metric("🛢️ Brent ($/배럴)", f"${l.get('value','N/A')}", help=f"기준일: {l.get('date','')}")
+        with col3:
+            gold_raw = comm.get("gold", {})
+            rcp = gold_raw.get("Realtime Commodity Prices", {})
+            gold_price = rcp.get("Realtime Gold Price (USD)", "N/A")
+            if isinstance(gold_price, dict):
+                gold_price = list(gold_price.values())[0] if gold_price else "N/A"
+            st.metric("🥇 금 ($/oz)", f"${gold_price}")
+        with col4:
+            l = _comm_latest(comm.get("copper", {}))
+            st.metric("🔧 구리", f"${l.get('value','N/A')}", delta=_comm_delta(comm.get("copper", {})))
+        with col5:
+            l = _comm_latest(comm.get("ng", {}))
+            st.metric("💨 천연가스 ($/MMBtu)", f"${l.get('value','N/A')}", help=f"기준일: {l.get('date','')}")
+    st.write("---")
+
+    # ── 섹션 4: 실적 발표 캘린더 ──────────────────────────────
+    st.markdown("#### 📅 실적 발표 캘린더 (3개월)")
+    raw_text = st.session_state.mcp_earnings_cal
+    if raw_text:
+        try:
+            reader = csv.DictReader(io.StringIO(raw_text))
+            rows = [r for r in reader]
+            if rows:
+                st.dataframe(rows[:50], use_container_width=True)
+            else:
+                st.info("예정된 실적 발표가 없습니다.")
+        except Exception as e:
+            st.error(f"파싱 오류: {e}")
+    st.write("---")
+
+    # ── 섹션 5: 인사이더 트랜잭션 ──────────────────────────────
+    st.markdown("#### 🕵️ 인사이더 트랜잭션")
+    col_i1, col_i2 = st.columns([4, 1])
+    with col_i1:
+        insider_ticker = st.text_input("종목 티커 입력", placeholder="예: AAPL, NVDA, TSLA", key="mcp_insider_ticker", label_visibility="collapsed")
+    with col_i2:
+        insider_btn = st.button("조회", key="mcp_insider_btn", use_container_width=True)
+
+    if insider_btn and insider_ticker:
+        t_up = insider_ticker.strip().upper()
+        with st.spinner(f"{t_up} 인사이더 트랜잭션 로딩 중..."):
+            result = av_get({"function": "INSIDER_TRANSACTIONS", "symbol": t_up})
+            st.session_state.mcp_insider[t_up] = result
+
+    if st.session_state.mcp_insider:
+        for t_key, idata in st.session_state.mcp_insider.items():
+            st.markdown(f"**{t_key}** 인사이더 트랜잭션")
+            if "Information" in idata:
+                st.warning(idata["Information"])
+            elif "error" in idata:
+                st.error(idata["error"])
+            else:
+                transactions = idata.get("data", [])
+                if transactions:
+                    cols_to_show = ["transaction_date", "executive", "executive_title", "transaction_type", "shares", "share_price", "value"]
+                    rows = [{k: tx.get(k, "") for k in cols_to_show} for tx in transactions[:20]]
+                    st.dataframe(rows, use_container_width=True)
+                else:
+                    st.info("트랜잭션 데이터가 없습니다.")
+    else:
+        st.caption("티커를 입력하고 조회 버튼을 클릭하면 인사이더 거래 내역을 표시합니다.")
+    st.write("---")
+
+    # ── 섹션 6: 어닝콜 트랜스크립트 AI 요약 ────────────────────
+    st.markdown("#### 🎙️ 어닝콜 트랜스크립트 AI 요약")
+    col_t1, col_t2, col_t3 = st.columns([2, 2, 1])
+    with col_t1:
+        tr_ticker = st.text_input("종목 티커", placeholder="예: AAPL", key="mcp_transcript_ticker", label_visibility="collapsed")
+    with col_t2:
+        tr_quarter = st.text_input("분기", placeholder="예: 2024Q4", key="mcp_transcript_quarter", label_visibility="collapsed")
+    with col_t3:
+        tr_btn = st.button("🧠 AI 요약", key="mcp_transcript_btn", use_container_width=True)
+
+    if tr_btn:
+        if tr_ticker and tr_quarter:
+            t_up = tr_ticker.strip().upper()
+            cache_key = f"{t_up}_{tr_quarter.strip()}"
+            with st.spinner(f"{t_up} {tr_quarter} 어닝콜 AI 요약 중..."):
+                result = av_get({"function": "EARNINGS_CALL_TRANSCRIPT", "symbol": t_up, "quarter": tr_quarter.strip()})
+                if "Information" in result:
+                    st.warning(result["Information"])
+                elif "error" in result:
+                    st.error(result["error"])
+                else:
+                    transcript_text = result.get("transcript", "")
+                    if not transcript_text:
+                        for v in result.values():
+                            if isinstance(v, str) and len(v) > 500:
+                                transcript_text = v
+                                break
+                    if transcript_text:
+                        prompt = f"""다음은 {t_up}의 {tr_quarter} 어닝콜 트랜스크립트입니다.
+한국어로 핵심 내용을 아래 형식으로 요약해 주세요:
+
+1. **실적 요약**: 매출, 순이익, EPS 주요 수치
+2. **경영진 핵심 발언**: CEO/CFO의 중요 발언 3~5가지
+3. **가이던스**: 다음 분기/연간 전망
+4. **주요 리스크**: 경영진이 언급한 위험 요소
+5. **투자 시사점**: 종합적인 투자 관점에서의 시사점
+
+트랜스크립트:
+{transcript_text[:15000]}"""
+                        try:
+                            response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+                            summary = response.text
+                        except Exception as e:
+                            summary = f"요약 생성 실패: {str(e)}"
+                        st.session_state.mcp_transcript[cache_key] = {
+                            "ticker": t_up, "quarter": tr_quarter.strip(),
+                            "summary": summary, "raw_preview": transcript_text[:500],
+                        }
+                    else:
+                        st.warning("트랜스크립트 데이터를 찾을 수 없습니다.")
+        else:
+            st.warning("티커와 분기를 모두 입력해 주세요.")
+
+    if st.session_state.mcp_transcript:
+        for key, item in st.session_state.mcp_transcript.items():
+            st.success(f"🎯 **{item['ticker']} {item['quarter']} 어닝콜 요약 완료**")
+            st.write(item["summary"])
+            with st.expander("원문 미리보기 (첫 500자)", expanded=False):
+                st.text(item.get("raw_preview", ""))
+            st.write("---")
+    else:
+        st.caption("종목 티커와 분기를 입력하면 어닝콜 트랜스크립트를 AI로 요약합니다.")
+
+
+# ==========================================
 # 📌 메인 앱 렌더링
 # ==========================================
 def main():
@@ -1110,7 +1506,7 @@ def main():
         "글로벌 지정학":  "미중 OR 관세 OR 중동 OR 트럼프 OR 공급망"
     }
 
-    tab_news, tab_alpha, tab_yt = st.tabs(["📰 일반 뉴스 브리핑", "📈 Alpha Vantage 프리미엄", "📺 유튜브 인사이트"])
+    tab_news, tab_alpha, tab_yt, tab_mcp = st.tabs(["📰 일반 뉴스 브리핑", "📈 Alpha Vantage 프리미엄", "📺 유튜브 인사이트", "📊 MCP 마켓 대시보드"])
 
     with tab_news:
         render_tab_news_fragment(target_keywords, user_interest, default_keywords)
@@ -1120,6 +1516,9 @@ def main():
 
     with tab_yt:
         render_tab_youtube_fragment()
+
+    with tab_mcp:
+        render_tab_mcp_fragment()
 
 if __name__ == "__main__":
     main()
