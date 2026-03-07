@@ -322,9 +322,9 @@ def generate_headline_data_summary(title, snippet):
 # ==========================================
 # 📈 [NEW] Alpha Vantage 프리미엄 통신 로직 (V10.2 투 트랙 필터링 적용)
 # ==========================================
-def fetch_alpha_vantage_news(sector_name, start_idx):
+def fetch_alpha_vantage_news(sector_name, start_idx, sort="RELEVANCE"):
     if not ALPHAVANTAGE_API_KEY:
-        return "", {}, [], start_idx
+        return "", {}, [], start_idx, False
 
     topic_map = {
         "글로벌 빅테크": "technology",
@@ -336,8 +336,8 @@ def fetch_alpha_vantage_news(sector_name, start_idx):
     }
     
     topic = topic_map.get(sector_name)
-    if not topic: 
-        return "", {}, [], start_idx
+    if not topic:
+        return "", {}, [], start_idx, False
 
     time_from = (datetime.now(pytz.UTC) - timedelta(hours=15)).strftime("%Y%m%dT%H%M")
     url = "https://www.alphavantage.co/query"
@@ -346,19 +346,43 @@ def fetch_alpha_vantage_news(sector_name, start_idx):
         "topics": topic,
         "time_from": time_from,
         "limit": 30,
-        "sort": "RELEVANCE",
+        "sort": sort,
         "apikey": ALPHAVANTAGE_API_KEY
     }
 
-    # 🛡️ 1.5차 필터링용 리스트 정의
+    # 🛡️ 1.5차 필터링용 리스트 정의 (~100개 확장판)
     ALPHA_PREMIUM_PUBLISHERS = [
-        "reuters", "bloomberg", "apnews", "afp", "wsj", "ft.com", "cnbc",
-        "economist", "marketwatch", "barrons", "forbes", "fortune", "nytimes",
-        "washingtonpost", "bbc", "cnn", "theguardian", "time", "businessinsider",
-        "finance.yahoo", "investing.com", "techcrunch", "wired", "foxbusiness",
-        "thestreet", "investors", "morningstar", "nikkei", "scmp", "theverge",
-        "arstechnica", "engadget", "zdnet", "technologyreview", "coindesk",
-        "cointelegraph", "decrypt", "npr", "usatoday", "aljazeera"
+        # 글로벌 통신사
+        "reuters", "bloomberg", "apnews", "afp", "kyodonews",
+        # 미국 주요 금융/경제
+        "wsj", "ft.com", "cnbc", "marketwatch", "barrons", "forbes", "fortune",
+        "thestreet", "investors", "morningstar", "foxbusiness", "finance.yahoo",
+        "investing.com", "kiplinger", "investopedia", "bankrate", "spglobal",
+        "institutionalinvestor", "venturebeat",
+        # 미국 주요 종합뉴스
+        "nytimes", "washingtonpost", "cnn", "bbc", "usatoday", "npr",
+        "theatlantic", "newyorker", "newsweek", "time", "politico", "axios",
+        "thehill", "abcnews", "nbcnews", "cbsnews", "vox", "latimes",
+        "bostonglobe", "nypost", "chicagotribune", "sfgate", "propublica",
+        # 영국/유럽
+        "theguardian", "economist", "independent.co.uk", "telegraph.co.uk",
+        "euronews", "dw.com", "france24", "lemonde", "spiegel",
+        # 아시아/오세아니아
+        "nikkei", "scmp", "straitstimes", "channelnewsasia", "japantimes",
+        "timesofindia", "thehindu", "smh.com.au", "globeandmail", "cbc.ca",
+        # 테크
+        "techcrunch", "wired", "theverge", "arstechnica", "zdnet",
+        "technologyreview", "cnet", "pcmag", "tomshardware", "eetimes",
+        "semianalysis", "9to5mac", "macrumors", "androidauthority", "engadget",
+        # 국제/정책
+        "businessinsider", "aljazeera", "foreignpolicy", "foreignaffairs",
+        "cfr.org", "brookings",
+        # 크립토
+        "coindesk", "cointelegraph", "decrypt", "theblock", "blockworks",
+        # 에너지/원자재
+        "oilprice",
+        # 과학/헬스
+        "statnews", "nature.com", "pbs",
     ]
     
     ALPHA_TABLOID_PUBLISHERS = [
@@ -376,7 +400,7 @@ def fetch_alpha_vantage_news(sector_name, start_idx):
             data = res.json()
             if "Information" in data or "Note" in data:
                 print(f"[Alpha Vantage] API Limit Reached: {data}")
-                return "", {}, [], start_idx
+                return "", {}, [], start_idx, True
 
             feed = data.get("feed", [])
             for item in feed:
@@ -409,8 +433,8 @@ def fetch_alpha_vantage_news(sector_name, start_idx):
                 idx += 1
     except Exception as e:
         print(f"[Error] Alpha Vantage 통신 실패: {e}")
-        
-    return "\n".join(context_list), news_map, tabloid_list, idx
+
+    return "\n".join(context_list), news_map, tabloid_list, idx, False
 
 # 🇰🇷 [V10.2] 일괄 번역 엔진 (1회 Gemini 호출로 N개 제목 동시 번역)
 def batch_translate_to_korean(titles: list) -> list:
@@ -748,7 +772,13 @@ def render_tab_alpha_fragment(target_keywords, user_interest, default_keywords):
             search_query = target_kw if target_kw else default_keywords[sector_name]
             
             ui_status_text.markdown(f"🔍 [{sector_name}] 감성 분석 스캔 중...")
-            raw_context, local_map, local_tabloid, alpha_idx = fetch_alpha_vantage_news(sector_name, alpha_idx)
+            raw_context, local_map, local_tabloid, alpha_idx, api_limit_hit = fetch_alpha_vantage_news(sector_name, alpha_idx)
+
+            if api_limit_hit:
+                timer_placeholder.empty()
+                ui_status_text.empty()
+                st.error("🚨 Alpha Vantage API 일일 한도를 초과했습니다. 내일 다시 시도해주세요. (무료 플랜: 25회/일)")
+                return
             
             # 찌라시 분리수거 및 일괄 번역 (Gemini 1회 호출)
             if local_tabloid:
@@ -761,10 +791,26 @@ def render_tab_alpha_fragment(target_keywords, user_interest, default_keywords):
                         local_map[t_item['id']]['title'] = kor_title
                 st.session_state.alpha_data["tabloid_results"].extend(local_tabloid)
 
-            # 프리미엄 1티어 뉴스 AI 필터링 및 일괄 번역 (Gemini 1회 호출)
+            # 프리미엄 1티어 뉴스 AI 필터링 및 일괄 번역 (최소 5개 보장 재시도 로직)
             if raw_context:
                 ui_status_text.markdown(f"🧠 [{sector_name}] AI 엘리트 필터링 및 **한국어 번역 중...**")
                 curated_list = apply_prism_lens_single(sector_name, raw_context, user_interest, search_query)
+
+                # 5개 미만이면 LATEST 정렬로 2차 호출 후 합산 재필터링
+                if len(curated_list) < 5:
+                    ui_status_text.markdown(f"🔄 [{sector_name}] 뉴스 부족 ({len(curated_list)}개) → 추가 수집 중...")
+                    raw_context2, local_map2, local_tabloid2, alpha_idx, api_limit_hit2 = fetch_alpha_vantage_news(sector_name, alpha_idx, sort="LATEST")
+                    if api_limit_hit2:
+                        timer_placeholder.empty()
+                        ui_status_text.empty()
+                        st.error("🚨 Alpha Vantage API 일일 한도를 초과했습니다. 내일 다시 시도해주세요. (무료 플랜: 25회/일)")
+                        return
+                    if raw_context2:
+                        local_map.update(local_map2)
+                        local_tabloid.extend(local_tabloid2)
+                        merged_context = raw_context + "\n" + raw_context2
+                        ui_status_text.markdown(f"🧠 [{sector_name}] 합산 데이터 재필터링 중...")
+                        curated_list = apply_prism_lens_single(sector_name, merged_context, user_interest, search_query)
 
                 eng_titles = [item.get('title', '') for item in curated_list]
                 kor_titles = batch_translate_to_korean(eng_titles)
