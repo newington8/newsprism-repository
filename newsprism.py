@@ -280,6 +280,7 @@ def apply_prism_lens_single(sector_name, news_context, user_interest, target_kw)
     2. JSON의 모든 키(key)와 문자열 값(value)은 반드시 쌍따옴표(")로 감싸야 합니다 (표준 JSON 규격).
     3. 기사 제목(title) 내부에 인용구가 있다면, 파싱 에러 방지를 위해 기사 제목 내부의 따옴표만 홑따옴표(')로 변경하세요.
     4. 부가 설명 없이 대괄호 [] 로 시작하고 끝나는 JSON 배열만 출력하세요.
+    5. 각 기사 제목 끝에 붙은 `[도메인]` 형태의 출처 정보는 절대 생략하거나 수정하지 말고 그대로 유지하세요.
 
     [출력 JSON 구조 예시]
     [
@@ -389,7 +390,7 @@ def fetch_alpha_vantage_news(sector_name, start_idx):
                     continue
 
                 sentiment = item.get("overall_sentiment_label", "Neutral")
-                clean_title = f"[{sentiment}] [{item.get('source_domain', 'External')}] {sanitize_text(item.get('title', ''))}"
+                clean_title = f"[{sentiment}] {sanitize_text(item.get('title', ''))} [{item.get('source_domain', 'External')}]"
                 n_id = f"A{idx}"
                 
                 news_map[n_id] = {
@@ -412,13 +413,23 @@ def fetch_alpha_vantage_news(sector_name, start_idx):
 
 # 🇰🇷 [V10.1] 지연 번역(Lazy Translation) 전용 엔진
 def translate_english_to_korean(text):
-    prompt = f"""
-    아래 영어 뉴스 헤드라인을 자연스러운 한국어로 번역하세요.
-    단, 문자열 앞의 대괄호 '[Bullish]', '[Bearish]', '[Neutral]' 등 감성 라벨과 '[www.reuters.com]' 같은 출처(언론사) 태그는 **절대 번역하거나 수정하지 말고 원본 그대로 유지**하세요.
+
+
+# [프롬프트 내용 수정]
+prompt = f"""
+아래 영어 뉴스 헤드라인을 자연스러운 한국어로 번역하세요.
+
+[절대 규칙]
+1. 문장 맨 앞의 `[Bullish]`, `[Bearish]`, `[Neutral]` 배지는 번역하지 말고 원문 그대로 유지하세요.
+2. 문장 맨 끝의 `[www.example.com]` 형태의 출처 태그는 괄호 형태인 `(언론사명)`으로 바꾸어 문장 맨 끝에 배치하세요. 
+   (예: [www.reuters.com] -> (Reuters), [finance.yahoo.com] -> (Yahoo Finance))
+3. 중간의 핵심 기사 내용만 한국어로 매끄럽게 번역하세요.
+
+[원본 텍스트]
+{text}
+"""
+
     
-    [원본 텍스트]
-    {text}
-    """
     try:
         response = client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
         return response.text.strip()
@@ -1003,3 +1014,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
