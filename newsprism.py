@@ -346,6 +346,7 @@ def fetch_alpha_vantage_news(sector_name, start_idx):
         "topics": topic,
         "time_from": time_from,
         "limit": 30,
+        "sort": "RELEVANCE",
         "apikey": ALPHAVANTAGE_API_KEY
     }
 
