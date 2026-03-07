@@ -433,14 +433,6 @@ def translate_english_to_korean(text):
         print(f"[Error] 제목 번역 실패: {e}")
         return text
 
-    
-    try:
-        response = client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
-        return response.text.strip()
-    except Exception as e:
-        print(f"[Error] 제목 번역 실패: {e}")
-        return text 
-
 # ==========================================
 # 📺 yt-dlp 기반 유튜브 엔진
 # ==========================================
@@ -1018,5 +1010,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
