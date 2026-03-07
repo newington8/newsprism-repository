@@ -81,7 +81,25 @@ def sanitize_text(text):
     text = text.replace('&quot;', "'").replace('&amp;', '&').replace('&apos;', "'")
     return text.strip()
 
-def is_within_15_hours(date_str):
+def get_lookback_hours(mode="general"):
+    """한국시간 기준으로 뉴스 수집 시간 범위를 동적으로 결정"""
+    kst = pytz.timezone('Asia/Seoul')
+    now_kst = datetime.now(kst)
+    weekday = now_kst.weekday()  # 0=월요일, 6=일요일
+    hour = now_kst.hour
+
+    if mode == "alpha":
+        # 일요일 또는 월요일 오전 8시 이전 → 72시간
+        if weekday == 6 or (weekday == 0 and hour < 8):
+            return 72
+        return 15
+    else:
+        # 일요일 또는 월요일 → 24시간
+        if weekday == 6 or weekday == 0:
+            return 24
+        return 15
+
+def is_within_hours(date_str, hours=15):
     if not date_str:
         return True
     try:
@@ -94,7 +112,7 @@ def is_within_15_hours(date_str):
             dt = datetime.strptime(date_str, "%a, %d %b %Y %H:%M:%S GMT").replace(tzinfo=pytz.UTC)
         else:
             return True
-        return (now_utc - dt).total_seconds() <= 15 * 3600
+        return (now_utc - dt).total_seconds() <= hours * 3600
     except Exception:
         return True
 
@@ -192,12 +210,13 @@ def fetch_single_sector_news(sector_name, search_query, start_idx):
     all_news_context = []
     news_map = {}
     article_idx = start_idx
+    hours = get_lookback_hours(mode="general")
 
     # 1. GNews 엔진
-    google_news = GNews(language='ko', country='KR', max_results=30, period='15h')
+    google_news = GNews(language='ko', country='KR', max_results=30, period=f'{hours}h')
     try:
         for item in google_news.get_news(search_query):
-            if is_within_15_hours(item.get('published date', '')):
+            if is_within_hours(item.get('published date', ''), hours):
                 pub = item.get('publisher', {})
                 publisher_name = pub.get('title', '') if isinstance(pub, dict) else str(pub)
 
@@ -219,7 +238,7 @@ def fetch_single_sector_news(sector_name, search_query, start_idx):
         naver_res = requests.get(naver_url, headers=naver_headers, params={"query": search_query, "display": 30, "sort": "sim"})
         if naver_res.status_code == 200:
             for item in naver_res.json().get('items', []):
-                if is_within_15_hours(item.get('pubDate', '')):
+                if is_within_hours(item.get('pubDate', ''), hours):
                     link = item.get('originallink', item.get('link', ''))
                     clean_title = sanitize_text(item['title'])
 
@@ -241,7 +260,7 @@ def fetch_single_sector_news(sector_name, search_query, start_idx):
         if newsapi_res.status_code == 200:
             for item in newsapi_res.json().get('articles', []):
                 if item.get('title') and item['title'] != "[Removed]":
-                    if is_within_15_hours(item.get('publishedAt', '')):
+                    if is_within_hours(item.get('publishedAt', ''), hours):
                         pub = item.get('source', {})
                         publisher_name = pub.get('name', '') if isinstance(pub, dict) else str(pub)
                         clean_title = sanitize_text(item['title'])
@@ -339,7 +358,8 @@ def fetch_alpha_vantage_news(sector_name, start_idx, sort="RELEVANCE"):
     if not topic:
         return "", {}, [], start_idx, False
 
-    time_from = (datetime.now(pytz.UTC) - timedelta(hours=15)).strftime("%Y%m%dT%H%M")
+    hours = get_lookback_hours(mode="alpha")
+    time_from = (datetime.now(pytz.UTC) - timedelta(hours=hours)).strftime("%Y%m%dT%H%M")
     url = "https://www.alphavantage.co/query"
     params = {
         "function": "NEWS_SENTIMENT",
