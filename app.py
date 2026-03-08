@@ -1048,6 +1048,7 @@ def render_tab_mcp_fragment():
         ('mcp_earnings_cal', None), ('mcp_last_loaded', 0),
         ('mcp_insider', {}), ('mcp_transcript', {}), ('mcp_ticker_names', {}),
         ('mcp_brief', {}), ('mcp_tr_candidates', None), ('mcp_tr_query', ''),
+        ('mcp_cal_selected', None),
     ]:
         if _k not in st.session_state:
             st.session_state[_k] = _v
@@ -1127,7 +1128,7 @@ def render_tab_mcp_fragment():
                     week_ago = closes[-6] if len(closes) >= 6 else None
                     return {
                         "price":      meta.get("regularMarketPrice"),
-                        "prev_close": meta.get("chartPreviousClose") or meta.get("previousClose"),
+                        "prev_close": meta.get("regularMarketPreviousClose"),
                         "week_ago":   week_ago,
                         "currency":   meta.get("currency", "USD"),
                     }
@@ -1384,17 +1385,102 @@ def render_tab_mcp_fragment():
     st.write("---")
 
     # ── 섹션 4: 실적 발표 캘린더 ──────────────────────────────
-    st.markdown("#### 📅 실적 발표 캘린더 (3개월)")
+    st.markdown("#### 📅 실적 발표 캘린더 (S&P 500 · 3개월)")
     raw_text = st.session_state.mcp_earnings_cal
     if raw_text:
         try:
+            from collections import defaultdict as _dd
+            from datetime import datetime as _dt2, timedelta as _td
+
             reader = csv.DictReader(io.StringIO(raw_text))
             _sp500_set = get_sp500_tickers()
             rows = [r for r in reader if r.get("symbol", "").strip() in _sp500_set]
-            if rows:
-                st.dataframe(rows[:50], use_container_width=True)
-            else:
+
+            if not rows:
                 st.info("S&P 500 기업의 예정된 실적 발표가 없습니다.")
+            else:
+                # 날짜별 그룹핑
+                _cal = _dd(list)
+                for _r in rows:
+                    _cal[_r.get("reportDate", "")].append(_r)
+                _all_dates = sorted([d for d in _cal if d])
+                _today_str = _dt2.now().strftime("%Y-%m-%d")
+                _day_names = ["월", "화", "수", "목", "금"]
+
+                _first = _dt2.strptime(_all_dates[0], "%Y-%m-%d")
+                _last  = _dt2.strptime(_all_dates[-1], "%Y-%m-%d")
+                _mon   = _first - _td(days=_first.weekday())
+
+                while _mon <= _last:
+                    _wdays = [_mon + _td(days=i) for i in range(5)]
+                    _wstrs = [d.strftime("%Y-%m-%d") for d in _wdays]
+                    if not any(s in _cal for s in _wstrs):
+                        _mon += _td(weeks=1)
+                        continue
+
+                    _wlabel = f"{_wdays[0].strftime('%Y. %m/%d')} ~ {_wdays[4].strftime('%m/%d')}"
+                    st.markdown(f"**📆 {_wlabel}**")
+                    _dcols = st.columns(5)
+
+                    for _ci, (_dcol, _ds, _do) in enumerate(zip(_dcols, _wstrs, _wdays)):
+                        with _dcol:
+                            _is_past = _ds < _today_str
+                            _dlabel = f"{'~~' if _is_past else ''}**{_day_names[_ci]} {_do.strftime('%m/%d')}**{'~~' if _is_past else ''}"
+                            st.markdown(_dlabel)
+                            _cos = _cal.get(_ds, [])
+                            for _co in _cos[:10]:
+                                _tk  = _co.get("symbol", "").strip()
+                                _nm  = _co.get("name", _tk)
+                                _short = (_nm[:16] + "…") if len(_nm) > 16 else _nm
+                                if st.button(_short, key=f"cal_{_tk}_{_ds}", use_container_width=True,
+                                             help=f"{_tk} · EPS 예상: {_co.get('estimate','N/A')}"):
+                                    st.session_state.mcp_cal_selected = {
+                                        "ticker": _tk, "name": _nm,
+                                        "estimate": _co.get("estimate", "N/A"),
+                                        "fiscal":   _co.get("fiscalDateEnding", ""),
+                                        "date":     _ds,
+                                    }
+                            if len(_cos) > 10:
+                                st.caption(f"+{len(_cos)-10}개 더")
+
+                    st.write("---")
+                    _mon += _td(weeks=1)
+
+                # ── 선택된 기업 상세 패널 ──────────────────────────
+                _sel = st.session_state.mcp_cal_selected
+                if _sel:
+                    _tk  = _sel["ticker"]
+                    _nm  = _sel["name"]
+                    _col_h, _col_x = st.columns([8, 1])
+                    with _col_h:
+                        st.markdown(f"#### 🔍 {_nm} &nbsp; `{_tk}`")
+                    with _col_x:
+                        if st.button("✕ 닫기", key="cal_close"):
+                            st.session_state.mcp_cal_selected = None
+                            st.rerun()
+                    st.markdown(
+                        f"📅 **발표일**: {_sel['date']} &nbsp;|&nbsp; "
+                        f"📊 **회계기간**: {_sel['fiscal']} &nbsp;|&nbsp; "
+                        f"💰 **EPS 예상**: {_sel['estimate']}"
+                    )
+                    if _tk not in st.session_state.mcp_brief:
+                        if st.button(f"📋 {_nm} 기업 개요 · 어닝콜 포인트 조회", key=f"cal_brief_{_tk}"):
+                            with st.spinner(f"{_tk} 정보 생성 중..."):
+                                _bp = f"""미국 상장 기업 {_tk} ({_nm})에 대해 한국어로 브리핑해줘.
+아래 항목을 포함해서 6~8문장으로 작성해:
+- 주요 사업 및 핵심 제품/서비스
+- 시장 포지션 및 주요 경쟁사
+- 최근 이슈 또는 성장 동력
+- 투자 관점에서의 특징 (성장주/가치주/배당주 등)
+- 이번 실적 발표에서 시장이 주목할 포인트 (EPS 예상치 달성 여부, 가이던스, 비용 구조 등)"""
+                                try:
+                                    _br = client.models.generate_content(model="gemini-2.0-flash", contents=_bp)
+                                    st.session_state.mcp_brief[_tk] = _br.text
+                                except Exception as _e:
+                                    st.session_state.mcp_brief[_tk] = f"조회 실패: {_e}"
+                    if _tk in st.session_state.mcp_brief:
+                        st.write(st.session_state.mcp_brief[_tk])
+
         except Exception as e:
             st.error(f"파싱 오류: {e}")
     st.write("---")
@@ -1563,7 +1649,7 @@ def render_tab_mcp_fragment():
 # 📌 메인 앱 렌더링
 # ==========================================
 def main():
-    st.set_page_config(page_title="News Prism V10.7", page_icon="💎", layout="wide")
+    st.set_page_config(page_title="News Prism V10.8", page_icon="💎", layout="wide")
 
     st.markdown("""
         <style>
