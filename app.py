@@ -1111,18 +1111,23 @@ def render_tab_mcp_fragment():
                 "nfp":          av_get({"function": "NONFARM_PAYROLL"}),
             }
             def _yf_price(symbol):
-                """Yahoo Finance 차트 API로 현재가 + 전일 종가 조회"""
+                """Yahoo Finance 차트 API로 현재가 + 전일 종가 + 5거래일 전 종가 조회"""
                 try:
                     r = requests.get(
                         f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
-                        params={"interval": "1d", "range": "2d"},
+                        params={"interval": "1d", "range": "1mo"},
                         headers={"User-Agent": "Mozilla/5.0"},
                         timeout=6
                     )
-                    meta = r.json().get("chart", {}).get("result", [{}])[0].get("meta", {})
+                    result = r.json().get("chart", {}).get("result", [{}])[0]
+                    meta   = result.get("meta", {})
+                    closes = result.get("indicators", {}).get("quote", [{}])[0].get("close", [])
+                    closes = [c for c in closes if c is not None]
+                    week_ago = closes[-6] if len(closes) >= 6 else None
                     return {
                         "price":      meta.get("regularMarketPrice"),
                         "prev_close": meta.get("chartPreviousClose") or meta.get("previousClose"),
+                        "week_ago":   week_ago,
                         "currency":   meta.get("currency", "USD"),
                     }
                 except Exception:
@@ -1130,7 +1135,7 @@ def render_tab_mcp_fragment():
             _yf_map = {
                 "wti":    "CL=F",
                 "brent":  "BZ=F",
-                "dubai":  "DC=F",
+                "dubai":  "DBLc1",
                 "gold":   "GC=F",
                 "silver": "SI=F",
                 "copper": "HG=F",
@@ -1316,13 +1321,27 @@ def render_tab_mcp_fragment():
 
     def _yf_metric(label, key):
         d = comm.get(key, {})
-        p, prev = d.get("price"), d.get("prev_close")
+        p, prev, wk = d.get("price"), d.get("prev_close"), d.get("week_ago")
         try:
             price_str = f"${float(p):,.2f}" if p is not None else "N/A"
-            delta_str = f"{float(p) - float(prev):+.2f}" if p is not None and prev is not None else None
         except Exception:
-            price_str, delta_str = "N/A", None
-        st.metric(label, price_str, delta=delta_str)
+            price_str = "N/A"
+        day_pct = week_pct = None
+        try:
+            if p is not None and prev is not None:
+                day_pct = (float(p) - float(prev)) / float(prev) * 100
+        except Exception:
+            pass
+        try:
+            if p is not None and wk is not None:
+                week_pct = (float(p) - float(wk)) / float(wk) * 100
+        except Exception:
+            pass
+        day_str  = f"{day_pct:+.2f}%"  if day_pct  is not None else None
+        week_str = f"{week_pct:+.2f}%" if week_pct is not None else "N/A"
+        week_color = "green" if (week_pct or 0) >= 0 else "red"
+        st.metric(label, price_str, delta=day_str, help="전일비 등락률")
+        st.markdown(f"<small>주간 <span style='color:{week_color}'>{week_str}</span></small>", unsafe_allow_html=True)
 
     if comm:
         col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
@@ -1349,7 +1368,7 @@ def render_tab_mcp_fragment():
         try:
             reader = csv.DictReader(io.StringIO(raw_text))
             _sp500_set = get_sp500_tickers()
-            rows = [r for r in reader if r.get("symbol", "") in _sp500_set]
+            rows = [r for r in reader if r.get("symbol", "").strip() in _sp500_set]
             if rows:
                 st.dataframe(rows[:50], use_container_width=True)
             else:
