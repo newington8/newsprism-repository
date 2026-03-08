@@ -1385,7 +1385,7 @@ def render_tab_mcp_fragment():
     st.write("---")
 
     # ── 섹션 4: 실적 발표 캘린더 ──────────────────────────────
-    st.markdown("#### 📅 실적 발표 캘린더 (S&P 500 · 3개월)")
+    st.markdown("#### 📅 실적 발표 캘린더 (S&P 500 · 2주)")
     raw_text = st.session_state.mcp_earnings_cal
     if raw_text:
         try:
@@ -1403,34 +1403,30 @@ def render_tab_mcp_fragment():
                 _cal = _dd(list)
                 for _r in rows:
                     _cal[_r.get("reportDate", "")].append(_r)
-                _all_dates = sorted([d for d in _cal if d])
-                _today_str = _dt2.now().strftime("%Y-%m-%d")
-                _day_names = ["월", "화", "수", "목", "금"]
+                _today      = _dt2.now()
+                _today_str  = _today.strftime("%Y-%m-%d")
+                _day_names  = ["월", "화", "수", "목", "금"]
+                # 이번 주 월요일부터 2주치만 표시
+                _mon    = _today - _td(days=_today.weekday())
+                _cutoff = _mon + _td(weeks=2)
 
-                _first = _dt2.strptime(_all_dates[0], "%Y-%m-%d")
-                _last  = _dt2.strptime(_all_dates[-1], "%Y-%m-%d")
-                _mon   = _first - _td(days=_first.weekday())
-
-                while _mon <= _last:
-                    _wdays = [_mon + _td(days=i) for i in range(5)]
-                    _wstrs = [d.strftime("%Y-%m-%d") for d in _wdays]
-                    if not any(s in _cal for s in _wstrs):
-                        _mon += _td(weeks=1)
-                        continue
-
-                    _wlabel = f"{_wdays[0].strftime('%Y. %m/%d')} ~ {_wdays[4].strftime('%m/%d')}"
+                for _w in range(2):
+                    _cur_mon = _mon + _td(weeks=_w)
+                    _wdays   = [_cur_mon + _td(days=i) for i in range(5)]
+                    _wstrs   = [d.strftime("%Y-%m-%d") for d in _wdays]
+                    _wlabel  = f"{_wdays[0].strftime('%Y. %m/%d')} ~ {_wdays[4].strftime('%m/%d')}"
                     st.markdown(f"**📆 {_wlabel}**")
                     _dcols = st.columns(5)
 
                     for _ci, (_dcol, _ds, _do) in enumerate(zip(_dcols, _wstrs, _wdays)):
                         with _dcol:
                             _is_past = _ds < _today_str
-                            _dlabel = f"{'~~' if _is_past else ''}**{_day_names[_ci]} {_do.strftime('%m/%d')}**{'~~' if _is_past else ''}"
+                            _dlabel  = f"{'~~' if _is_past else ''}**{_do.strftime('%m/%d')} ({_day_names[_ci]})**{'~~' if _is_past else ''}"
                             st.markdown(_dlabel)
                             _cos = _cal.get(_ds, [])
                             for _co in _cos[:10]:
-                                _tk  = _co.get("symbol", "").strip()
-                                _nm  = _co.get("name", _tk)
+                                _tk    = _co.get("symbol", "").strip()
+                                _nm    = _co.get("name", _tk)
                                 _short = (_nm[:16] + "…") if len(_nm) > 16 else _nm
                                 if st.button(_short, key=f"cal_{_tk}_{_ds}", use_container_width=True,
                                              help=f"{_tk} · EPS 예상: {_co.get('estimate','N/A')}"):
@@ -1444,7 +1440,6 @@ def render_tab_mcp_fragment():
                                 st.caption(f"+{len(_cos)-10}개 더")
 
                     st.write("---")
-                    _mon += _td(weeks=1)
 
                 # ── 선택된 기업 상세 패널 ──────────────────────────
                 _sel = st.session_state.mcp_cal_selected
@@ -1595,6 +1590,8 @@ def render_tab_mcp_fragment():
         st.session_state.mcp_transcript[cache_key] = {
             "ticker": ticker, "quarter": latest_quarter,
             "summary": summary, "raw_preview": transcript_text[:500],
+            "full_text": transcript_text,
+            "searches": {},
         }
 
     # ── 입력 UI ──
@@ -1635,11 +1632,57 @@ def render_tab_mcp_fragment():
 
     # ── 결과 표시 ──
     if st.session_state.mcp_transcript:
-        for key, item in st.session_state.mcp_transcript.items():
-            st.success(f"🎯 **{item['ticker']} {item['quarter']} 어닝콜 요약 완료**")
-            st.write(item["summary"])
+        for _tkey, _titem in st.session_state.mcp_transcript.items():
+            st.success(f"🎯 **{_titem['ticker']} {_titem['quarter']} 어닝콜 요약 완료**")
+            st.write(_titem["summary"])
             with st.expander("원문 미리보기 (첫 500자)", expanded=False):
-                st.text(item.get("raw_preview", ""))
+                st.text(_titem.get("raw_preview", ""))
+
+            # ── 트랜스크립트 내 검색 ──────────────────────────
+            st.markdown("**🔍 트랜스크립트 내 검색**")
+            _sq_col, _sb_col = st.columns([5, 1])
+            with _sq_col:
+                _search_q = st.text_input(
+                    "검색어", placeholder="예: 마진 가이던스, AI 투자 계획, 중국 매출, buyback...",
+                    key=f"tr_search_q_{_tkey}", label_visibility="collapsed"
+                )
+            with _sb_col:
+                _search_btn = st.button("🔍 검색", key=f"tr_search_btn_{_tkey}", use_container_width=True)
+
+            if _search_btn and _search_q:
+                _full = _titem.get("full_text", "")
+                if not _full:
+                    st.warning("전문 데이터가 없습니다. 요약을 다시 실행해 주세요.")
+                else:
+                    with st.spinner(f"'{_search_q}' 검색 중..."):
+                        _sp = f"""다음은 {_titem['ticker']}의 {_titem['quarter']} 어닝콜 트랜스크립트입니다.
+
+트랜스크립트에서 아래 주제와 관련된 내용을 모두 찾아주세요: "{_search_q}"
+
+결과를 아래 형식으로 작성해주세요. 반드시 트랜스크립트의 정확한 원문을 인용하세요:
+
+**[관련 발언 N]**
+> "원문 그대로 인용 (영어 그대로)"
+
+**맥락 설명 (한국어):** 이 발언의 배경과 의미를 2~3문장으로 설명
+
+---
+
+관련 내용이 전혀 없으면 "해당 내용을 트랜스크립트에서 찾을 수 없습니다."라고만 답하세요.
+
+트랜스크립트:
+{_full[:20000]}"""
+                        try:
+                            _sr = client.models.generate_content(model="gemini-2.0-flash", contents=_sp)
+                            _titem["searches"][_search_q] = _sr.text
+                        except Exception as _se:
+                            _titem["searches"][_search_q] = f"검색 실패: {_se}"
+
+            # 검색 결과 표시
+            for _sq, _sr in _titem.get("searches", {}).items():
+                with st.expander(f"🔎 검색 결과: \"{_sq}\"", expanded=True):
+                    st.write(_sr)
+
             st.write("---")
     else:
         st.caption("티커(AAPL) 또는 기업명(애플, 구글 등)을 입력하면 최신 어닝콜을 AI로 요약합니다.")
@@ -1649,7 +1692,7 @@ def render_tab_mcp_fragment():
 # 📌 메인 앱 렌더링
 # ==========================================
 def main():
-    st.set_page_config(page_title="News Prism V10.8", page_icon="💎", layout="wide")
+    st.set_page_config(page_title="News Prism V10.9", page_icon="💎", layout="wide")
 
     st.markdown("""
         <style>
