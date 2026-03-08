@@ -1587,8 +1587,51 @@ def render_tab_mcp_fragment():
                                 "Bullish": "🟢", "Somewhat-Bullish": "🟡",
                                 "Neutral": "⚪", "Somewhat-Bearish": "🟠", "Bearish": "🔴"
                             }
-                            for _art in _feed[:10]:
-                                _title = _art.get("title","")
+
+                            # 감성 아이콘 범례
+                            st.markdown(
+                                "🟢 **강세** &nbsp;·&nbsp; 🟡 **약강세** &nbsp;·&nbsp; "
+                                "⚪ **중립** &nbsp;·&nbsp; 🟠 **약약세** &nbsp;·&nbsp; 🔴 **약세**  \n"
+                                "<small>감성 스코어: -1.0(극약세) ~ 0(중립) ~ +1.0(극강세)</small>",
+                                unsafe_allow_html=True
+                            )
+
+                            # 한국어 번역 버튼
+                            _kr_key = f"news_kr_{_tk}"
+                            _is_kr  = _kr_key in st.session_state.mcp_cal_data.get(_tk, {})
+                            _btn_label = "🌐 영어로 보기" if _is_kr else "🇰🇷 한국어로 보기"
+                            if st.button(_btn_label, key=f"cal_news_kr_{_tk}"):
+                                if _is_kr:
+                                    # 영어로 되돌리기
+                                    st.session_state.mcp_cal_data[_tk].pop("news_kr", None)
+                                    st.rerun()
+                                else:
+                                    _titles = [a.get("title","") for a in _feed[:10]]
+                                    with st.spinner("헤드라인 번역 중..."):
+                                        _tr_prompt = (
+                                            "아래 영어 뉴스 헤드라인을 각각 자연스러운 한국어로 번역해줘.\n"
+                                            "번호 순서 그대로, 한 줄에 하나씩만 출력하고 부가 설명은 쓰지 마.\n\n"
+                                            + "\n".join(f"{i+1}. {t}" for i, t in enumerate(_titles))
+                                        )
+                                        try:
+                                            _tr_resp = client.models.generate_content(
+                                                model="gemini-2.0-flash", contents=_tr_prompt
+                                            )
+                                            _tr_lines = [
+                                                l.strip().lstrip("0123456789.").strip()
+                                                for l in _tr_resp.text.strip().splitlines()
+                                                if l.strip()
+                                            ]
+                                            st.session_state.mcp_cal_data[_tk]["news_kr"] = _tr_lines
+                                        except Exception as _te:
+                                            st.error(f"번역 실패: {_te}")
+                                    st.rerun()
+
+                            st.write("")
+                            _kr_titles = st.session_state.mcp_cal_data.get(_tk, {}).get("news_kr", [])
+
+                            for _i, _art in enumerate(_feed[:10]):
+                                _title = _kr_titles[_i] if _kr_titles and _i < len(_kr_titles) else _art.get("title","")
                                 _url   = _art.get("url","")
                                 _src   = _art.get("source","")
                                 _tp    = _art.get("time_published","")[:8]
@@ -1601,12 +1644,12 @@ def render_tab_mcp_fragment():
                                 _icon  = _sent_icon.get(_sent, "⚪")
                                 _score = _art.get("overall_sentiment_score","")
                                 try:
-                                    _score = f"({float(_score):+.3f})"
+                                    _score = f"{float(_score):+.3f}"
                                 except Exception:
                                     _score = ""
                                 st.markdown(
                                     f"{_icon} **[{_title}]({_url})**  \n"
-                                    f"`{_src}` · {_tp} · {_sent} {_score}"
+                                    f"`{_src}` · {_tp} · {_sent} `{_score}`"
                                 )
                                 st.write("---")
 
@@ -1826,7 +1869,7 @@ def render_tab_mcp_fragment():
 # 📌 메인 앱 렌더링
 # ==========================================
 def main():
-    st.set_page_config(page_title="News Prism V10.11", page_icon="💎", layout="wide")
+    st.set_page_config(page_title="News Prism V10.12", page_icon="💎", layout="wide")
 
     st.markdown("""
         <style>
