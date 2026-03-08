@@ -1000,6 +1000,24 @@ def render_tab_youtube_fragment():
 # ==========================================
 # 📌 Alpha Vantage MCP 탭
 # ==========================================
+@st.cache_data(ttl=86400)
+def get_sp500_tickers():
+    """GitHub CSV에서 S&P 500 구성 종목 티커 목록 가져오기 (24시간 캐시)"""
+    try:
+        r = requests.get(
+            "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv",
+            timeout=10
+        )
+        tickers = set()
+        for line in r.text.splitlines()[1:]:  # 헤더 제외
+            parts = line.split(',')
+            if parts and parts[0].strip():
+                tickers.add(parts[0].strip())
+        return tickers if tickers else set()
+    except Exception:
+        return set()
+
+
 def render_tab_mcp_fragment():
     """Alpha Vantage MCP 탭 - 탭 진입 시 자동 로딩"""
     import time as _time
@@ -1093,11 +1111,13 @@ def render_tab_mcp_fragment():
                 "nfp":          av_get({"function": "NONFARM_PAYROLL"}),
             }
             st.session_state.mcp_commodities  = {
-                "wti":    _parse_comm_csv(av_get_text({"function": "WTI",         "interval": "daily"})),
-                "brent":  _parse_comm_csv(av_get_text({"function": "BRENT",       "interval": "daily"})),
-                "gold":   av_get({"function": "GOLD_SILVER_SPOT"}),
-                "copper": av_get({"function": "COPPER",      "interval": "monthly"}),
-                "ng":     _parse_comm_csv(av_get_text({"function": "NATURAL_GAS", "interval": "daily"})),
+                "wti":    av_get({"function": "WTI",         "interval": "daily"}),
+                "brent":  av_get({"function": "BRENT",       "interval": "daily"}),
+                "dubai":  av_get({"function": "GLOBAL_QUOTE", "symbol": "DBLc1"}),
+                "gold":   av_get({"function": "GOLD",        "interval": "daily"}),
+                "silver": av_get({"function": "SILVER",      "interval": "daily"}),
+                "copper": av_get({"function": "COPPER",      "interval": "daily"}),
+                "ng":     av_get({"function": "NATURAL_GAS", "interval": "daily"}),
             }
             st.session_state.mcp_earnings_cal = av_get_text({"function": "EARNINGS_CALENDAR", "horizon": "3month"})
 
@@ -1142,7 +1162,8 @@ def render_tab_mcp_fragment():
     elif "error" in data:
         st.error(data["error"])
     else:
-        _names = st.session_state.get('mcp_ticker_names', {})
+        _names  = st.session_state.get('mcp_ticker_names', {})
+        _sp500  = get_sp500_tickers()
 
         def _fmt_vol(v):
             try:
@@ -1151,25 +1172,33 @@ def render_tab_mcp_fragment():
             except Exception:
                 return str(v)
 
-        def _render_items(items):
-            for item in items[:10]:
+        def _render_items(items, limit=10):
+            shown = 0
+            for item in items:
                 ticker = item['ticker']
-                name   = _names.get(ticker, ticker)
-                pct    = item.get("change_percentage", "")
-                price  = item['price']
-                vol    = _fmt_vol(item.get('volume', ''))
-                label  = name if name != ticker else ticker
+                if ticker not in _sp500:
+                    continue
+                name  = _names.get(ticker, ticker)
+                pct   = item.get("change_percentage", "")
+                price = item['price']
+                vol   = _fmt_vol(item.get('volume', ''))
+                label = name if name != ticker else ticker
                 st.markdown(f"**{label}**  \n`{ticker}` · ${price} · `{pct}` · {vol}")
+                shown += 1
+                if shown >= limit:
+                    break
+            if shown == 0:
+                st.caption("S&P 500 종목 없음")
 
         col_g, col_l, col_a = st.columns(3)
         with col_g:
-            st.markdown("**🟢 Top Gainers**")
+            st.markdown("**🟢 Top Gainers** _(S&P 500)_")
             _render_items(data.get("top_gainers", []))
         with col_l:
-            st.markdown("**🔴 Top Losers**")
+            st.markdown("**🔴 Top Losers** _(S&P 500)_")
             _render_items(data.get("top_losers", []))
         with col_a:
-            st.markdown("**🔵 Most Active**")
+            st.markdown("**🔵 Most Active** _(S&P 500)_")
             _render_items(data.get("most_actively_traded", []))
     st.write("---")
 
@@ -1202,6 +1231,15 @@ def render_tab_mcp_fragment():
                 return None
         return None
 
+    # 다음 발표일 정보 (고정 스케줄)
+    _next_release = {
+        "cpi":          "매월 10~15일경 (전월 기준) | BLS",
+        "ppi":          "매월 11~16일경 (전월 기준) | BLS",
+        "ffr":          "FOMC 회의 후 발표 (연 8회)",
+        "unemployment": "매월 첫째 금요일 (NFP 동시 발표) | BLS",
+        "nfp":          "매월 첫째 금요일 | BLS",
+    }
+
     if macro:
         # ── CPI / PPI (전월비 · 전년비) ──
         col1, col2, col3, col4 = st.columns(4)
@@ -1209,16 +1247,18 @@ def render_tab_mcp_fragment():
         ppi = macro.get("ppi", {})
         with col1:
             l = _latest(cpi)
-            st.metric("🏷️ CPI 전월비", _pct_chg(cpi, 1), help=f"소비자물가지수 | 기준일: {l.get('date','')}")
+            st.metric("🏷️ CPI 전월비", _pct_chg(cpi, 1))
+            st.caption(f"기준: {l.get('date','')}  \n다음 발표: {_next_release['cpi']}")
         with col2:
-            l = _latest(cpi)
-            st.metric("🏷️ CPI 전년비", _pct_chg(cpi, 12), help=f"소비자물가지수 | 기준일: {l.get('date','')}")
+            st.metric("🏷️ CPI 전년비", _pct_chg(cpi, 12))
+            st.caption(" ")
         with col3:
             l = _latest(ppi)
-            st.metric("🏭 PPI 전월비", _pct_chg(ppi, 1), help=f"생산자물가지수 (FRED PPIACO) | 기준일: {l.get('date','')}")
+            st.metric("🏭 PPI 전월비", _pct_chg(ppi, 1))
+            st.caption(f"기준: {l.get('date','')}  \n다음 발표: {_next_release['ppi']}")
         with col4:
-            l = _latest(ppi)
-            st.metric("🏭 PPI 전년비", _pct_chg(ppi, 12), help=f"생산자물가지수 (FRED PPIACO) | 기준일: {l.get('date','')}")
+            st.metric("🏭 PPI 전년비", _pct_chg(ppi, 12))
+            st.caption(" ")
 
         st.write("")
 
@@ -1227,11 +1267,13 @@ def render_tab_mcp_fragment():
         with col5:
             l = _latest(macro.get("ffr", {}))
             st.metric("🏦 연방기금금리", f"{l.get('value','N/A')}%",
-                      delta=_abs_delta(macro.get("ffr", {})), help=f"기준일: {l.get('date','')}")
+                      delta=_abs_delta(macro.get("ffr", {})))
+            st.caption(f"기준: {l.get('date','')}  \n다음 발표: {_next_release['ffr']}")
         with col6:
             l = _latest(macro.get("unemployment", {}))
             st.metric("👷 실업률", f"{l.get('value','N/A')}%",
-                      delta=_abs_delta(macro.get("unemployment", {})), help=f"기준일: {l.get('date','')}")
+                      delta=_abs_delta(macro.get("unemployment", {})))
+            st.caption(f"기준: {l.get('date','')}  \n다음 발표: {_next_release['unemployment']}")
         with col7:
             l = _latest(macro.get("nfp", {}))
             try:
@@ -1239,7 +1281,8 @@ def render_tab_mcp_fragment():
             except Exception:
                 val_k = l.get("value", "N/A")
             st.metric("💼 비농업고용", val_k,
-                      delta=_abs_delta(macro.get("nfp", {})), help=f"기준일: {l.get('date','')}")
+                      delta=_abs_delta(macro.get("nfp", {})))
+            st.caption(f"기준: {l.get('date','')}  \n다음 발표: {_next_release['nfp']}")
     st.write("---")
 
     # ── 섹션 3: 원자재 시세판 ──────────────────────────────────
@@ -1259,26 +1302,43 @@ def render_tab_mcp_fragment():
         return None
 
     if comm:
-        col1, col2, col3, col4, col5 = st.columns(5)
+        col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
         with col1:
             l = _comm_latest(comm.get("wti", {}))
-            st.metric("🛢️ WTI ($/배럴)", f"${l.get('value','N/A')}", help=f"기준일: {l.get('date','')}")
+            st.metric("🛢️ WTI ($/bbl)", f"${l.get('value','N/A')}", delta=_comm_delta(comm.get("wti", {})), help=f"기준일: {l.get('date','')}")
         with col2:
             l = _comm_latest(comm.get("brent", {}))
-            st.metric("🛢️ Brent ($/배럴)", f"${l.get('value','N/A')}", help=f"기준일: {l.get('date','')}")
+            st.metric("🛢️ Brent ($/bbl)", f"${l.get('value','N/A')}", delta=_comm_delta(comm.get("brent", {})), help=f"기준일: {l.get('date','')}")
         with col3:
-            gold_raw = comm.get("gold", {})
-            rcp = gold_raw.get("Realtime Commodity Prices", {})
-            gold_price = rcp.get("Realtime Gold Price (USD)", "N/A")
-            if isinstance(gold_price, dict):
-                gold_price = list(gold_price.values())[0] if gold_price else "N/A"
-            st.metric("🥇 금 ($/oz)", f"${gold_price}")
+            dubai_raw = comm.get("dubai", {}).get("Global Quote", {})
+            dubai_price = dubai_raw.get("05. price", "N/A")
+            dubai_prev = dubai_raw.get("08. previous close", None)
+            try:
+                dubai_delta = f"{float(dubai_price) - float(dubai_prev):+.2f}" if dubai_prev else None
+                dubai_price = f"{float(dubai_price):,.2f}"
+            except Exception:
+                dubai_delta = None
+            st.metric("🛢️ Dubai ($/bbl)", f"${dubai_price}", delta=dubai_delta)
         with col4:
-            l = _comm_latest(comm.get("copper", {}))
-            st.metric("🔧 구리", f"${l.get('value','N/A')}", delta=_comm_delta(comm.get("copper", {})))
+            l = _comm_latest(comm.get("gold", {}))
+            try:
+                gold_val = f"{float(l.get('value','N/A')):,.2f}"
+            except Exception:
+                gold_val = l.get('value', 'N/A')
+            st.metric("🥇 금 ($/oz)", f"${gold_val}", delta=_comm_delta(comm.get("gold", {})), help=f"기준일: {l.get('date','')}")
         with col5:
+            l = _comm_latest(comm.get("silver", {}))
+            try:
+                silver_val = f"{float(l.get('value','N/A')):,.2f}"
+            except Exception:
+                silver_val = l.get('value', 'N/A')
+            st.metric("🥈 은 ($/oz)", f"${silver_val}", delta=_comm_delta(comm.get("silver", {})), help=f"기준일: {l.get('date','')}")
+        with col6:
+            l = _comm_latest(comm.get("copper", {}))
+            st.metric("🔧 구리 ($/lb)", f"${l.get('value','N/A')}", delta=_comm_delta(comm.get("copper", {})), help=f"기준일: {l.get('date','')}")
+        with col7:
             l = _comm_latest(comm.get("ng", {}))
-            st.metric("💨 천연가스 ($/MMBtu)", f"${l.get('value','N/A')}", help=f"기준일: {l.get('date','')}")
+            st.metric("💨 천연가스 ($/MMBtu)", f"${l.get('value','N/A')}", delta=_comm_delta(comm.get("ng", {})), help=f"기준일: {l.get('date','')}")
     st.write("---")
 
     # ── 섹션 4: 실적 발표 캘린더 ──────────────────────────────
@@ -1506,7 +1566,10 @@ def main():
         "글로벌 지정학":  "미중 OR 관세 OR 중동 OR 트럼프 OR 공급망"
     }
 
-    tab_news, tab_alpha, tab_yt, tab_mcp = st.tabs(["📰 일반 뉴스 브리핑", "📈 Alpha Vantage 프리미엄", "📺 유튜브 인사이트", "📊 MCP 마켓 대시보드"])
+    tab_mcp, tab_news, tab_alpha, tab_yt = st.tabs(["📊 MCP 마켓 대시보드", "📰 일반 뉴스 브리핑", "📈 Alpha Vantage 프리미엄", "📺 유튜브 인사이트"])
+
+    with tab_mcp:
+        render_tab_mcp_fragment()
 
     with tab_news:
         render_tab_news_fragment(target_keywords, user_interest, default_keywords)
@@ -1516,9 +1579,6 @@ def main():
 
     with tab_yt:
         render_tab_youtube_fragment()
-
-    with tab_mcp:
-        render_tab_mcp_fragment()
 
 if __name__ == "__main__":
     main()
