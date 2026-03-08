@@ -1110,15 +1110,33 @@ def render_tab_mcp_fragment():
                 "unemployment": av_get({"function": "UNEMPLOYMENT"}),
                 "nfp":          av_get({"function": "NONFARM_PAYROLL"}),
             }
-            st.session_state.mcp_commodities  = {
-                "wti":    av_get({"function": "WTI",         "interval": "daily"}),
-                "brent":  av_get({"function": "BRENT",       "interval": "daily"}),
-                "dubai":  av_get({"function": "GLOBAL_QUOTE", "symbol": "DBLc1"}),
-                "gold":   av_get({"function": "GOLD",        "interval": "daily"}),
-                "silver": av_get({"function": "SILVER",      "interval": "daily"}),
-                "copper": av_get({"function": "COPPER",      "interval": "daily"}),
-                "ng":     av_get({"function": "NATURAL_GAS", "interval": "daily"}),
+            def _yf_price(symbol):
+                """Yahoo Finance 차트 API로 현재가 + 전일 종가 조회"""
+                try:
+                    r = requests.get(
+                        f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
+                        params={"interval": "1d", "range": "2d"},
+                        headers={"User-Agent": "Mozilla/5.0"},
+                        timeout=6
+                    )
+                    meta = r.json().get("chart", {}).get("result", [{}])[0].get("meta", {})
+                    return {
+                        "price":      meta.get("regularMarketPrice"),
+                        "prev_close": meta.get("chartPreviousClose") or meta.get("previousClose"),
+                        "currency":   meta.get("currency", "USD"),
+                    }
+                except Exception:
+                    return {}
+            _yf_map = {
+                "wti":    "CL=F",
+                "brent":  "BZ=F",
+                "dubai":  "DC=F",
+                "gold":   "GC=F",
+                "silver": "SI=F",
+                "copper": "HG=F",
+                "ng":     "NG=F",
             }
+            st.session_state.mcp_commodities = {k: _yf_price(v) for k, v in _yf_map.items()}
             st.session_state.mcp_earnings_cal = av_get_text({"function": "EARNINGS_CALENDAR", "horizon": "3month"})
 
             # ── 종목명 병렬 조회 (Yahoo Finance) ──
@@ -1163,7 +1181,6 @@ def render_tab_mcp_fragment():
         st.error(data["error"])
     else:
         _names  = st.session_state.get('mcp_ticker_names', {})
-        _sp500  = get_sp500_tickers()
 
         def _fmt_vol(v):
             try:
@@ -1176,29 +1193,37 @@ def render_tab_mcp_fragment():
             shown = 0
             for item in items:
                 ticker = item['ticker']
-                if ticker not in _sp500:
+                try:
+                    price_val = float(item.get('price', 0))
+                    vol_val   = int(item.get('volume', 0))
+                except Exception:
+                    continue
+                # NYSE/Nasdaq/NYSE American: 주가 $2 이상, 거래량 50,000 이상
+                if price_val < 2.0 or vol_val < 50000:
                     continue
                 name  = _names.get(ticker, ticker)
                 pct   = item.get("change_percentage", "")
-                price = item['price']
-                vol   = _fmt_vol(item.get('volume', ''))
+                vol   = _fmt_vol(vol_val)
                 label = name if name != ticker else ticker
-                st.markdown(f"**{label}**  \n`{ticker}` · ${price} · `{pct}` · {vol}")
+                st.markdown(f"**{label}**  \n`{ticker}` · ${price_val:.2f} · `{pct}` · {vol}")
                 shown += 1
                 if shown >= limit:
                     break
             if shown == 0:
-                st.caption("S&P 500 종목 없음")
+                st.caption("조건에 맞는 종목 없음")
 
         col_g, col_l, col_a = st.columns(3)
         with col_g:
-            st.markdown("**🟢 Top Gainers** _(S&P 500)_")
+            st.markdown("**🟢 Top Gainers**")
+            st.caption("NYSE·Nasdaq·NYSE American / ≥$2 / ≥50K vol")
             _render_items(data.get("top_gainers", []))
         with col_l:
-            st.markdown("**🔴 Top Losers** _(S&P 500)_")
+            st.markdown("**🔴 Top Losers**")
+            st.caption("NYSE·Nasdaq·NYSE American / ≥$2 / ≥50K vol")
             _render_items(data.get("top_losers", []))
         with col_a:
-            st.markdown("**🔵 Most Active** _(S&P 500)_")
+            st.markdown("**🔵 Most Active**")
+            st.caption("NYSE·Nasdaq·NYSE American / ≥$2 / ≥50K vol")
             _render_items(data.get("most_actively_traded", []))
     st.write("---")
 
@@ -1289,56 +1314,32 @@ def render_tab_mcp_fragment():
     st.markdown("#### 🛢️ 원자재 시세판")
     comm = st.session_state.mcp_commodities or {}
 
-    def _comm_latest(d):
-        return (d.get("data") or [{}])[0]
-
-    def _comm_delta(d):
-        items = d.get("data") or []
-        if len(items) >= 2:
-            try:
-                return f"{float(items[0]['value']) - float(items[1]['value']):+.2f}"
-            except Exception:
-                return None
-        return None
+    def _yf_metric(label, key):
+        d = comm.get(key, {})
+        p, prev = d.get("price"), d.get("prev_close")
+        try:
+            price_str = f"${float(p):,.2f}" if p is not None else "N/A"
+            delta_str = f"{float(p) - float(prev):+.2f}" if p is not None and prev is not None else None
+        except Exception:
+            price_str, delta_str = "N/A", None
+        st.metric(label, price_str, delta=delta_str)
 
     if comm:
         col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
         with col1:
-            l = _comm_latest(comm.get("wti", {}))
-            st.metric("🛢️ WTI ($/bbl)", f"${l.get('value','N/A')}", delta=_comm_delta(comm.get("wti", {})), help=f"기준일: {l.get('date','')}")
+            _yf_metric("🛢️ WTI ($/bbl)",        "wti")
         with col2:
-            l = _comm_latest(comm.get("brent", {}))
-            st.metric("🛢️ Brent ($/bbl)", f"${l.get('value','N/A')}", delta=_comm_delta(comm.get("brent", {})), help=f"기준일: {l.get('date','')}")
+            _yf_metric("🛢️ Brent ($/bbl)",      "brent")
         with col3:
-            dubai_raw = comm.get("dubai", {}).get("Global Quote", {})
-            dubai_price = dubai_raw.get("05. price", "N/A")
-            dubai_prev = dubai_raw.get("08. previous close", None)
-            try:
-                dubai_delta = f"{float(dubai_price) - float(dubai_prev):+.2f}" if dubai_prev else None
-                dubai_price = f"{float(dubai_price):,.2f}"
-            except Exception:
-                dubai_delta = None
-            st.metric("🛢️ Dubai ($/bbl)", f"${dubai_price}", delta=dubai_delta)
+            _yf_metric("🛢️ Dubai ($/bbl)",      "dubai")
         with col4:
-            l = _comm_latest(comm.get("gold", {}))
-            try:
-                gold_val = f"{float(l.get('value','N/A')):,.2f}"
-            except Exception:
-                gold_val = l.get('value', 'N/A')
-            st.metric("🥇 금 ($/oz)", f"${gold_val}", delta=_comm_delta(comm.get("gold", {})), help=f"기준일: {l.get('date','')}")
+            _yf_metric("🥇 금 ($/oz)",           "gold")
         with col5:
-            l = _comm_latest(comm.get("silver", {}))
-            try:
-                silver_val = f"{float(l.get('value','N/A')):,.2f}"
-            except Exception:
-                silver_val = l.get('value', 'N/A')
-            st.metric("🥈 은 ($/oz)", f"${silver_val}", delta=_comm_delta(comm.get("silver", {})), help=f"기준일: {l.get('date','')}")
+            _yf_metric("🥈 은 ($/oz)",           "silver")
         with col6:
-            l = _comm_latest(comm.get("copper", {}))
-            st.metric("🔧 구리 ($/lb)", f"${l.get('value','N/A')}", delta=_comm_delta(comm.get("copper", {})), help=f"기준일: {l.get('date','')}")
+            _yf_metric("🔧 구리 ($/lb)",         "copper")
         with col7:
-            l = _comm_latest(comm.get("ng", {}))
-            st.metric("💨 천연가스 ($/MMBtu)", f"${l.get('value','N/A')}", delta=_comm_delta(comm.get("ng", {})), help=f"기준일: {l.get('date','')}")
+            _yf_metric("💨 천연가스 ($/MMBtu)",  "ng")
     st.write("---")
 
     # ── 섹션 4: 실적 발표 캘린더 ──────────────────────────────
@@ -1347,11 +1348,12 @@ def render_tab_mcp_fragment():
     if raw_text:
         try:
             reader = csv.DictReader(io.StringIO(raw_text))
-            rows = [r for r in reader]
+            _sp500_set = get_sp500_tickers()
+            rows = [r for r in reader if r.get("symbol", "") in _sp500_set]
             if rows:
                 st.dataframe(rows[:50], use_container_width=True)
             else:
-                st.info("예정된 실적 발표가 없습니다.")
+                st.info("S&P 500 기업의 예정된 실적 발표가 없습니다.")
         except Exception as e:
             st.error(f"파싱 오류: {e}")
     st.write("---")
@@ -1391,33 +1393,49 @@ def render_tab_mcp_fragment():
 
     # ── 섹션 6: 어닝콜 트랜스크립트 AI 요약 ────────────────────
     st.markdown("#### 🎙️ 어닝콜 트랜스크립트 AI 요약")
-    col_t1, col_t2, col_t3 = st.columns([2, 2, 1])
+    col_t1, col_t2 = st.columns([4, 1])
     with col_t1:
-        tr_ticker = st.text_input("종목 티커", placeholder="예: AAPL", key="mcp_transcript_ticker", label_visibility="collapsed")
+        tr_ticker = st.text_input("종목 티커", placeholder="예: AAPL  (티커만 입력하면 최신 어닝콜 자동 조회)", key="mcp_transcript_ticker", label_visibility="collapsed")
     with col_t2:
-        tr_quarter = st.text_input("분기", placeholder="예: 2024Q4", key="mcp_transcript_quarter", label_visibility="collapsed")
-    with col_t3:
         tr_btn = st.button("🧠 AI 요약", key="mcp_transcript_btn", use_container_width=True)
 
     if tr_btn:
-        if tr_ticker and tr_quarter:
+        if tr_ticker:
             t_up = tr_ticker.strip().upper()
-            cache_key = f"{t_up}_{tr_quarter.strip()}"
-            with st.spinner(f"{t_up} {tr_quarter} 어닝콜 AI 요약 중..."):
-                result = av_get({"function": "EARNINGS_CALL_TRANSCRIPT", "symbol": t_up, "quarter": tr_quarter.strip()})
-                if "Information" in result:
-                    st.warning(result["Information"])
-                elif "error" in result:
-                    st.error(result["error"])
+            with st.spinner(f"{t_up} 최신 어닝콜 조회 중..."):
+                # 1단계: 최신 분기 자동 탐지
+                earnings_data = av_get({"function": "EARNINGS", "symbol": t_up})
+                quarterly = earnings_data.get("quarterlyEarnings", [])
+                latest_quarter = None
+                if quarterly:
+                    latest = quarterly[0]
+                    date_str = latest.get("fiscalDateEnding", "")
+                    try:
+                        from datetime import datetime as _dt
+                        d = _dt.strptime(date_str, "%Y-%m-%d")
+                        q = (d.month - 1) // 3 + 1
+                        latest_quarter = f"{d.year}Q{q}"
+                    except Exception:
+                        pass
+                if not latest_quarter:
+                    st.warning("최신 분기 정보를 가져올 수 없습니다. 티커를 확인해 주세요.")
                 else:
-                    transcript_text = result.get("transcript", "")
-                    if not transcript_text:
-                        for v in result.values():
-                            if isinstance(v, str) and len(v) > 500:
-                                transcript_text = v
-                                break
-                    if transcript_text:
-                        prompt = f"""다음은 {t_up}의 {tr_quarter} 어닝콜 트랜스크립트입니다.
+                    # 2단계: 트랜스크립트 조회
+                    result = av_get({"function": "EARNINGS_CALL_TRANSCRIPT", "symbol": t_up, "quarter": latest_quarter})
+                    cache_key = f"{t_up}_{latest_quarter}"
+                    if "Information" in result:
+                        st.warning(result["Information"])
+                    elif "error" in result:
+                        st.error(result["error"])
+                    else:
+                        transcript_text = result.get("transcript", "")
+                        if not transcript_text:
+                            for v in result.values():
+                                if isinstance(v, str) and len(v) > 500:
+                                    transcript_text = v
+                                    break
+                        if transcript_text:
+                            prompt = f"""다음은 {t_up}의 {latest_quarter} 어닝콜 트랜스크립트입니다.
 한국어로 핵심 내용을 아래 형식으로 요약해 주세요:
 
 1. **실적 요약**: 매출, 순이익, EPS 주요 수치
@@ -1428,19 +1446,19 @@ def render_tab_mcp_fragment():
 
 트랜스크립트:
 {transcript_text[:15000]}"""
-                        try:
-                            response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
-                            summary = response.text
-                        except Exception as e:
-                            summary = f"요약 생성 실패: {str(e)}"
-                        st.session_state.mcp_transcript[cache_key] = {
-                            "ticker": t_up, "quarter": tr_quarter.strip(),
-                            "summary": summary, "raw_preview": transcript_text[:500],
-                        }
-                    else:
-                        st.warning("트랜스크립트 데이터를 찾을 수 없습니다.")
+                            try:
+                                response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+                                summary = response.text
+                            except Exception as e:
+                                summary = f"요약 생성 실패: {str(e)}"
+                            st.session_state.mcp_transcript[cache_key] = {
+                                "ticker": t_up, "quarter": latest_quarter,
+                                "summary": summary, "raw_preview": transcript_text[:500],
+                            }
+                        else:
+                            st.warning(f"{latest_quarter} 트랜스크립트 데이터를 찾을 수 없습니다.")
         else:
-            st.warning("티커와 분기를 모두 입력해 주세요.")
+            st.warning("티커를 입력해 주세요.")
 
     if st.session_state.mcp_transcript:
         for key, item in st.session_state.mcp_transcript.items():
@@ -1450,14 +1468,14 @@ def render_tab_mcp_fragment():
                 st.text(item.get("raw_preview", ""))
             st.write("---")
     else:
-        st.caption("종목 티커와 분기를 입력하면 어닝콜 트랜스크립트를 AI로 요약합니다.")
+        st.caption("종목 티커를 입력하면 최신 어닝콜 트랜스크립트를 AI로 요약합니다.")
 
 
 # ==========================================
 # 📌 메인 앱 렌더링
 # ==========================================
 def main():
-    st.set_page_config(page_title="News Prism V10.3", page_icon="💎", layout="wide")
+    st.set_page_config(page_title="News Prism V10.5", page_icon="💎", layout="wide")
 
     st.markdown("""
         <style>
