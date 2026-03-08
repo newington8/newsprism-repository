@@ -1406,9 +1406,9 @@ def render_tab_mcp_fragment():
                 _today      = _dt2.now()
                 _today_str  = _today.strftime("%Y-%m-%d")
                 _day_names  = ["월", "화", "수", "목", "금"]
-                # 이번 주 월요일부터 2주치만 표시
-                _mon    = _today - _td(days=_today.weekday())
-                _cutoff = _mon + _td(weeks=2)
+                # 오늘이 포함된 주(평일) 또는 다음 주(주말) 월요일 기준 2주 표시
+                _wd  = _today.weekday()
+                _mon = _today - _td(days=_wd) if _wd < 5 else _today + _td(days=7 - _wd)
 
                 for _w in range(2):
                     _cur_mon = _mon + _td(weeks=_w)
@@ -1692,7 +1692,7 @@ def render_tab_mcp_fragment():
 # 📌 메인 앱 렌더링
 # ==========================================
 def main():
-    st.set_page_config(page_title="News Prism V10.9", page_icon="💎", layout="wide")
+    st.set_page_config(page_title="News Prism V10.10", page_icon="💎", layout="wide")
 
     st.markdown("""
         <style>
