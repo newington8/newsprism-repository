@@ -1048,7 +1048,7 @@ def render_tab_mcp_fragment():
         ('mcp_earnings_cal', None), ('mcp_last_loaded', 0),
         ('mcp_insider', {}), ('mcp_transcript', {}), ('mcp_ticker_names', {}),
         ('mcp_brief', {}), ('mcp_tr_candidates', None), ('mcp_tr_query', ''),
-        ('mcp_cal_selected', None),
+        ('mcp_cal_selected', None), ('mcp_cal_data', {}),
     ]:
         if _k not in st.session_state:
             st.session_state[_k] = _v
@@ -1444,37 +1444,171 @@ def render_tab_mcp_fragment():
                 # ── 선택된 기업 상세 패널 ──────────────────────────
                 _sel = st.session_state.mcp_cal_selected
                 if _sel:
-                    _tk  = _sel["ticker"]
-                    _nm  = _sel["name"]
-                    _col_h, _col_x = st.columns([8, 1])
-                    with _col_h:
+                    _tk = _sel["ticker"]
+                    _nm = _sel["name"]
+
+                    # 데이터 자동 로드 (캐시 없을 때만)
+                    if _tk not in st.session_state.mcp_cal_data:
+                        with st.spinner(f"📡 {_tk} 데이터 로딩 중..."):
+                            _ov   = av_get({"function": "OVERVIEW",  "symbol": _tk})
+                            _ear  = av_get({"function": "EARNINGS",  "symbol": _tk})
+                            _news = av_get({"function": "NEWS_SENTIMENT", "tickers": _tk,
+                                            "sort": "RELEVANCE", "limit": "10"})
+                            # Gemini AI 브리핑 (OVERVIEW 데이터 활용)
+                            _desc = _ov.get("Description", "")
+                            _bp = f"""미국 상장 기업 {_tk} ({_nm}) 어닝 브리핑을 한국어로 작성해줘.
+
+기업 정보:
+- 섹터: {_ov.get('Sector','N/A')} / 업종: {_ov.get('Industry','N/A')}
+- 시가총액: {_ov.get('MarketCapitalization','N/A')} / P/E: {_ov.get('PERatio','N/A')} / EPS: {_ov.get('EPS','N/A')}
+- 52주 범위: {_ov.get('52WeekLow','N/A')} ~ {_ov.get('52WeekHigh','N/A')}
+- 애널리스트 목표가: {_ov.get('AnalystTargetPrice','N/A')}
+- 기업 설명: {_desc[:800] if _desc else 'N/A'}
+
+다음 항목으로 작성해:
+1. **핵심 비즈니스 요약** (2~3문장)
+2. **이번 실적 주목 포인트** (EPS 달성 여부, 매출 성장률, 마진, 가이던스)
+3. **시장이 주시하는 리스크** (2~3가지)
+4. **밸류에이션 & 투자 성격** (성장주/가치주/배당주, 현재 PER 수준 평가)"""
+                            try:
+                                _br = client.models.generate_content(model="gemini-2.0-flash", contents=_bp)
+                                _brief_text = _br.text
+                            except Exception as _e:
+                                _brief_text = f"생성 실패: {_e}"
+                            st.session_state.mcp_cal_data[_tk] = {
+                                "overview": _ov, "earnings": _ear,
+                                "news": _news,   "brief": _brief_text,
+                            }
+
+                    _cd   = st.session_state.mcp_cal_data.get(_tk, {})
+                    _ov   = _cd.get("overview", {})
+                    _ear  = _cd.get("earnings", {})
+                    _news = _cd.get("news", {})
+
+                    # 헤더
+                    _ch, _cx = st.columns([8, 1])
+                    with _ch:
+                        _sec = _ov.get("Sector", "")
+                        _ind = _ov.get("Industry", "")
                         st.markdown(f"#### 🔍 {_nm} &nbsp; `{_tk}`")
-                    with _col_x:
+                        if _sec:
+                            st.caption(f"📌 {_sec}  ·  {_ind}")
+                    with _cx:
                         if st.button("✕ 닫기", key="cal_close"):
                             st.session_state.mcp_cal_selected = None
                             st.rerun()
                     st.markdown(
                         f"📅 **발표일**: {_sel['date']} &nbsp;|&nbsp; "
                         f"📊 **회계기간**: {_sel['fiscal']} &nbsp;|&nbsp; "
-                        f"💰 **EPS 예상**: {_sel['estimate']}"
+                        f"💰 **이번 분기 EPS 예상**: **{_sel['estimate']}**"
                     )
-                    if _tk not in st.session_state.mcp_brief:
-                        if st.button(f"📋 {_nm} 기업 개요 · 어닝콜 포인트 조회", key=f"cal_brief_{_tk}"):
-                            with st.spinner(f"{_tk} 정보 생성 중..."):
-                                _bp = f"""미국 상장 기업 {_tk} ({_nm})에 대해 한국어로 브리핑해줘.
-아래 항목을 포함해서 6~8문장으로 작성해:
-- 주요 사업 및 핵심 제품/서비스
-- 시장 포지션 및 주요 경쟁사
-- 최근 이슈 또는 성장 동력
-- 투자 관점에서의 특징 (성장주/가치주/배당주 등)
-- 이번 실적 발표에서 시장이 주목할 포인트 (EPS 예상치 달성 여부, 가이던스, 비용 구조 등)"""
+
+                    _tab1, _tab2, _tab3, _tab4 = st.tabs(
+                        ["🏢 기업 개요", "📊 분기 실적 이력", "🧠 AI 어닝 브리핑", "📰 관련 뉴스 (Relevance)"]
+                    )
+
+                    # ── Tab 1: 기업 개요 ──
+                    with _tab1:
+                        if _ov.get("Symbol"):
+                            def _fmt_mc(v):
                                 try:
-                                    _br = client.models.generate_content(model="gemini-2.0-flash", contents=_bp)
-                                    st.session_state.mcp_brief[_tk] = _br.text
-                                except Exception as _e:
-                                    st.session_state.mcp_brief[_tk] = f"조회 실패: {_e}"
-                    if _tk in st.session_state.mcp_brief:
-                        st.write(st.session_state.mcp_brief[_tk])
+                                    v = int(v)
+                                    return f"${v/1e9:.1f}B" if v >= 1e9 else f"${v/1e6:.0f}M"
+                                except Exception:
+                                    return str(v)
+                            _r1 = st.columns(4)
+                            _r1[0].metric("시가총액",      _fmt_mc(_ov.get("MarketCapitalization","N/A")))
+                            _r1[1].metric("P/E (TTM)",    _ov.get("PERatio","N/A"))
+                            _r1[2].metric("EPS (TTM)",    f"${_ov.get('EPS','N/A')}")
+                            try:
+                                _dy = f"{float(_ov.get('DividendYield','0') or 0)*100:.2f}%"
+                            except Exception:
+                                _dy = "N/A"
+                            _r1[3].metric("배당수익률",    _dy)
+                            _r2 = st.columns(4)
+                            _r2[0].metric("52주 최고",    f"${_ov.get('52WeekHigh','N/A')}")
+                            _r2[1].metric("52주 최저",    f"${_ov.get('52WeekLow','N/A')}")
+                            _r2[2].metric("목표주가",      f"${_ov.get('AnalystTargetPrice','N/A')}")
+                            _r2[3].metric("베타",          _ov.get("Beta","N/A"))
+                            _r3 = st.columns(4)
+                            _r3[0].metric("전분기 EPS",   f"${_ov.get('EPS','N/A')}")
+                            _r3[1].metric("매출(TTM)",    _fmt_mc(_ov.get("RevenueTTM","N/A")))
+                            _r3[2].metric("영업이익률",   f"{_ov.get('OperatingMarginTTM','N/A')}")
+                            _r3[3].metric("ROE",          f"{_ov.get('ReturnOnEquityTTM','N/A')}")
+                            _desc = _ov.get("Description","")
+                            if _desc:
+                                st.markdown("---")
+                                st.write(_desc)
+                        else:
+                            st.info("기업 개요 데이터를 불러올 수 없습니다.")
+
+                    # ── Tab 2: 분기 실적 이력 ──
+                    with _tab2:
+                        _qtrs = _ear.get("quarterlyEarnings", [])[:8]
+                        if _qtrs:
+                            _erows = []
+                            for _q in _qtrs:
+                                _surp = _q.get("surprisePercentage","")
+                                try:
+                                    _surp = f"{float(_surp):+.2f}%"
+                                except Exception:
+                                    pass
+                                _erows.append({
+                                    "분기":      _q.get("fiscalDateEnding",""),
+                                    "발표일":    _q.get("reportedDate",""),
+                                    "예상 EPS":  _q.get("estimatedEPS","N/A"),
+                                    "실제 EPS":  _q.get("reportedEPS","N/A"),
+                                    "서프라이즈": _surp,
+                                })
+                            st.dataframe(_erows, use_container_width=True)
+                            _annual = _ear.get("annualEarnings", [])[:4]
+                            if _annual:
+                                st.markdown("**연간 EPS 이력**")
+                                _arows = [{"연도": a.get("fiscalDateEnding",""), "EPS": a.get("reportedEPS","N/A")} for a in _annual]
+                                st.dataframe(_arows, use_container_width=True)
+                        else:
+                            st.info("실적 이력 데이터를 불러올 수 없습니다.")
+
+                    # ── Tab 3: AI 어닝 브리핑 ──
+                    with _tab3:
+                        _brief = _cd.get("brief","")
+                        if _brief:
+                            st.write(_brief)
+                        else:
+                            st.info("AI 브리핑 데이터가 없습니다.")
+
+                    # ── Tab 4: 관련 뉴스 ──
+                    with _tab4:
+                        _feed = _news.get("feed", [])
+                        if not _feed:
+                            st.info("관련 뉴스를 찾을 수 없습니다.")
+                        else:
+                            _sent_icon = {
+                                "Bullish": "🟢", "Somewhat-Bullish": "🟡",
+                                "Neutral": "⚪", "Somewhat-Bearish": "🟠", "Bearish": "🔴"
+                            }
+                            for _art in _feed[:10]:
+                                _title = _art.get("title","")
+                                _url   = _art.get("url","")
+                                _src   = _art.get("source","")
+                                _tp    = _art.get("time_published","")[:8]
+                                try:
+                                    from datetime import datetime as _dt3
+                                    _tp = _dt3.strptime(_tp, "%Y%m%d").strftime("%m/%d")
+                                except Exception:
+                                    pass
+                                _sent  = _art.get("overall_sentiment_label","Neutral")
+                                _icon  = _sent_icon.get(_sent, "⚪")
+                                _score = _art.get("overall_sentiment_score","")
+                                try:
+                                    _score = f"({float(_score):+.3f})"
+                                except Exception:
+                                    _score = ""
+                                st.markdown(
+                                    f"{_icon} **[{_title}]({_url})**  \n"
+                                    f"`{_src}` · {_tp} · {_sent} {_score}"
+                                )
+                                st.write("---")
 
         except Exception as e:
             st.error(f"파싱 오류: {e}")
@@ -1692,7 +1826,7 @@ def render_tab_mcp_fragment():
 # 📌 메인 앱 렌더링
 # ==========================================
 def main():
-    st.set_page_config(page_title="News Prism V10.10", page_icon="💎", layout="wide")
+    st.set_page_config(page_title="News Prism V10.11", page_icon="💎", layout="wide")
 
     st.markdown("""
         <style>
