@@ -1047,6 +1047,7 @@ def render_tab_mcp_fragment():
         ('mcp_gainers', None), ('mcp_macro', None), ('mcp_commodities', None),
         ('mcp_earnings_cal', None), ('mcp_last_loaded', 0),
         ('mcp_insider', {}), ('mcp_transcript', {}), ('mcp_ticker_names', {}),
+        ('mcp_brief', {}), ('mcp_tr_candidates', None), ('mcp_tr_query', ''),
     ]:
         if _k not in st.session_state:
             st.session_state[_k] = _v
@@ -1194,7 +1195,7 @@ def render_tab_mcp_fragment():
             except Exception:
                 return str(v)
 
-        def _render_items(items, limit=10):
+        def _render_items(items, limit=10, sec=""):
             shown = 0
             for item in items:
                 ticker = item['ticker']
@@ -1203,14 +1204,35 @@ def render_tab_mcp_fragment():
                     vol_val   = int(item.get('volume', 0))
                 except Exception:
                     continue
-                # NYSE/Nasdaq/NYSE American: 주가 $2 이상, 거래량 50,000 이상
                 if price_val < 2.0 or vol_val < 50000:
                     continue
                 name  = _names.get(ticker, ticker)
                 pct   = item.get("change_percentage", "")
                 vol   = _fmt_vol(vol_val)
                 label = name if name != ticker else ticker
-                st.markdown(f"**{label}**  \n`{ticker}` · ${price_val:.2f} · `{pct}` · {vol}")
+                # 종목 정보 + 기업 개요 버튼
+                c_info, c_btn = st.columns([5, 2])
+                with c_info:
+                    st.markdown(f"**{label}**  \n`{ticker}` · ${price_val:.2f} · `{pct}` · {vol}")
+                with c_btn:
+                    if st.button("📋 기업 개요", key=f"brief_{sec}_{ticker}", use_container_width=True):
+                        if ticker not in st.session_state.mcp_brief:
+                            with st.spinner(f"{ticker} 기업 개요 생성 중..."):
+                                _prompt = f"""미국 상장 기업 {ticker} ({label})에 대해 한국어로 간결하게 브리핑해줘.
+아래 항목을 포함해서 5~7문장으로 작성해:
+- 주요 사업 및 핵심 제품/서비스
+- 시장 포지션 및 주요 경쟁사
+- 최근 이슈 또는 성장 동력
+- 투자 관점에서의 특징 (성장주/가치주/배당주 등)"""
+                                try:
+                                    _resp = client.models.generate_content(model="gemini-2.0-flash", contents=_prompt)
+                                    st.session_state.mcp_brief[ticker] = _resp.text
+                                except Exception as _e:
+                                    st.session_state.mcp_brief[ticker] = f"기업 개요 생성 실패: {_e}"
+                # 캐싱된 기업 개요 표시
+                if ticker in st.session_state.mcp_brief:
+                    with st.expander(f"📄 {label} 기업 개요", expanded=True):
+                        st.write(st.session_state.mcp_brief[ticker])
                 shown += 1
                 if shown >= limit:
                     break
@@ -1221,15 +1243,15 @@ def render_tab_mcp_fragment():
         with col_g:
             st.markdown("**🟢 Top Gainers**")
             st.caption("NYSE·Nasdaq·NYSE American / ≥$2 / ≥50K vol")
-            _render_items(data.get("top_gainers", []))
+            _render_items(data.get("top_gainers", []), sec="g")
         with col_l:
             st.markdown("**🔴 Top Losers**")
             st.caption("NYSE·Nasdaq·NYSE American / ≥$2 / ≥50K vol")
-            _render_items(data.get("top_losers", []))
+            _render_items(data.get("top_losers", []), sec="l")
         with col_a:
             st.markdown("**🔵 Most Active**")
             st.caption("NYSE·Nasdaq·NYSE American / ≥$2 / ≥50K vol")
-            _render_items(data.get("most_actively_traded", []))
+            _render_items(data.get("most_actively_traded", []), sec="a")
     st.write("---")
 
     # ── 섹션 2: 거시경제 지표 ──────────────────────────────────
@@ -1412,49 +1434,63 @@ def render_tab_mcp_fragment():
 
     # ── 섹션 6: 어닝콜 트랜스크립트 AI 요약 ────────────────────
     st.markdown("#### 🎙️ 어닝콜 트랜스크립트 AI 요약")
-    col_t1, col_t2 = st.columns([4, 1])
-    with col_t1:
-        tr_ticker = st.text_input("종목 티커", placeholder="예: AAPL  (티커만 입력하면 최신 어닝콜 자동 조회)", key="mcp_transcript_ticker", label_visibility="collapsed")
-    with col_t2:
-        tr_btn = st.button("🧠 AI 요약", key="mcp_transcript_btn", use_container_width=True)
 
-    if tr_btn:
-        if tr_ticker:
-            t_up = tr_ticker.strip().upper()
-            with st.spinner(f"{t_up} 최신 어닝콜 조회 중..."):
-                # 1단계: 최신 분기 자동 탐지
-                earnings_data = av_get({"function": "EARNINGS", "symbol": t_up})
-                quarterly = earnings_data.get("quarterlyEarnings", [])
-                latest_quarter = None
-                if quarterly:
-                    latest = quarterly[0]
-                    date_str = latest.get("fiscalDateEnding", "")
-                    try:
-                        from datetime import datetime as _dt
-                        d = _dt.strptime(date_str, "%Y-%m-%d")
-                        q = (d.month - 1) // 3 + 1
-                        latest_quarter = f"{d.year}Q{q}"
-                    except Exception:
-                        pass
-                if not latest_quarter:
-                    st.warning("최신 분기 정보를 가져올 수 없습니다. 티커를 확인해 주세요.")
-                else:
-                    # 2단계: 트랜스크립트 조회
-                    result = av_get({"function": "EARNINGS_CALL_TRANSCRIPT", "symbol": t_up, "quarter": latest_quarter})
-                    cache_key = f"{t_up}_{latest_quarter}"
-                    if "Information" in result:
-                        st.warning(result["Information"])
-                    elif "error" in result:
-                        st.error(result["error"])
-                    else:
-                        transcript_text = result.get("transcript", "")
-                        if not transcript_text:
-                            for v in result.values():
-                                if isinstance(v, str) and len(v) > 500:
-                                    transcript_text = v
-                                    break
-                        if transcript_text:
-                            prompt = f"""다음은 {t_up}의 {latest_quarter} 어닝콜 트랜스크립트입니다.
+    import json as _json, re as _re
+
+    def _resolve_ticker(query):
+        """기업명 또는 티커를 AI로 변환. 반환: {status, ticker, name} 또는 {status, candidates:[{ticker,name}]}"""
+        prompt = f"""주식 투자 앱에서 사용자가 다음을 입력했습니다: "{query}"
+
+미국 주식 티커를 찾아주세요. 반드시 아래 JSON 형식 중 하나로만 응답하세요 (마크다운·설명 없이 순수 JSON만):
+
+명확한 경우:
+{{"status":"found","ticker":"AAPL","name":"Apple Inc."}}
+
+여러 후보가 있는 경우 (예: 구글→GOOGL/GOOG, 버크셔→BRK-A/BRK-B, 알파벳 주식 클래스 등):
+{{"status":"ambiguous","candidates":[{{"ticker":"BRK-A","name":"버크셔 해서웨이 클래스 A"}},{{"ticker":"BRK-B","name":"버크셔 해서웨이 클래스 B"}}]}}
+
+찾을 수 없는 경우:
+{{"status":"not_found","message":"해당 기업을 찾을 수 없습니다"}}"""
+        try:
+            resp = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+            text = resp.text.strip()
+            m = _re.search(r'\{.*\}', text, _re.DOTALL)
+            if m:
+                return _json.loads(m.group())
+        except Exception:
+            pass
+        return {"status": "not_found", "message": "티커 변환에 실패했습니다."}
+
+    def _fetch_transcript(ticker):
+        """최신 분기 자동 탐지 후 어닝콜 트랜스크립트 AI 요약"""
+        from datetime import datetime as _dt
+        earnings_data = av_get({"function": "EARNINGS", "symbol": ticker})
+        quarterly = earnings_data.get("quarterlyEarnings", [])
+        latest_quarter = None
+        if quarterly:
+            date_str = quarterly[0].get("fiscalDateEnding", "")
+            try:
+                d = _dt.strptime(date_str, "%Y-%m-%d")
+                latest_quarter = f"{d.year}Q{(d.month - 1) // 3 + 1}"
+            except Exception:
+                pass
+        if not latest_quarter:
+            st.warning("최신 분기 정보를 가져올 수 없습니다. 티커를 확인해 주세요.")
+            return
+        result = av_get({"function": "EARNINGS_CALL_TRANSCRIPT", "symbol": ticker, "quarter": latest_quarter})
+        cache_key = f"{ticker}_{latest_quarter}"
+        if "Information" in result:
+            st.warning(result["Information"]); return
+        if "error" in result:
+            st.error(result["error"]); return
+        transcript_text = result.get("transcript", "")
+        if not transcript_text:
+            for v in result.values():
+                if isinstance(v, str) and len(v) > 500:
+                    transcript_text = v; break
+        if not transcript_text:
+            st.warning(f"{latest_quarter} 트랜스크립트 데이터를 찾을 수 없습니다."); return
+        prompt = f"""다음은 {ticker}의 {latest_quarter} 어닝콜 트랜스크립트입니다.
 한국어로 핵심 내용을 아래 형식으로 요약해 주세요:
 
 1. **실적 요약**: 매출, 순이익, EPS 주요 수치
@@ -1465,20 +1501,53 @@ def render_tab_mcp_fragment():
 
 트랜스크립트:
 {transcript_text[:15000]}"""
-                            try:
-                                response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
-                                summary = response.text
-                            except Exception as e:
-                                summary = f"요약 생성 실패: {str(e)}"
-                            st.session_state.mcp_transcript[cache_key] = {
-                                "ticker": t_up, "quarter": latest_quarter,
-                                "summary": summary, "raw_preview": transcript_text[:500],
-                            }
-                        else:
-                            st.warning(f"{latest_quarter} 트랜스크립트 데이터를 찾을 수 없습니다.")
-        else:
-            st.warning("티커를 입력해 주세요.")
+        try:
+            response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+            summary = response.text
+        except Exception as e:
+            summary = f"요약 생성 실패: {str(e)}"
+        st.session_state.mcp_transcript[cache_key] = {
+            "ticker": ticker, "quarter": latest_quarter,
+            "summary": summary, "raw_preview": transcript_text[:500],
+        }
 
+    # ── 입력 UI ──
+    col_t1, col_t2 = st.columns([4, 1])
+    with col_t1:
+        tr_query = st.text_input("종목 티커 또는 기업명", placeholder="예: AAPL · 애플 · 버크셔 해서웨이 · 구글",
+                                 key="mcp_transcript_ticker", label_visibility="collapsed")
+    with col_t2:
+        tr_btn = st.button("🧠 AI 요약", key="mcp_transcript_btn", use_container_width=True)
+
+    if tr_btn:
+        if tr_query:
+            st.session_state.mcp_tr_candidates = None
+            st.session_state.mcp_tr_query = tr_query.strip()
+            with st.spinner("티커 확인 중..."):
+                resolved = _resolve_ticker(tr_query.strip())
+            if resolved["status"] == "found":
+                with st.spinner(f"{resolved['ticker']} 최신 어닝콜 조회 중..."):
+                    _fetch_transcript(resolved["ticker"])
+            elif resolved["status"] == "ambiguous":
+                st.session_state.mcp_tr_candidates = resolved.get("candidates", [])
+            else:
+                st.warning(resolved.get("message", "종목을 찾을 수 없습니다."))
+        else:
+            st.warning("티커 또는 기업명을 입력해 주세요.")
+
+    # ── 모호한 경우: 후보 선택 UI ──
+    if st.session_state.mcp_tr_candidates:
+        candidates = st.session_state.mcp_tr_candidates
+        st.info(f"**'{st.session_state.mcp_tr_query}'** 에 해당하는 종목이 여러 개입니다. 어떤 종목을 찾으셨나요?")
+        options = [f"{c['name']}  ({c['ticker']})" for c in candidates]
+        sel_idx = st.radio("종목 선택", range(len(options)), format_func=lambda i: options[i], key="mcp_tr_radio")
+        if st.button("✅ 이 종목으로 요약", key="mcp_tr_confirm", use_container_width=False):
+            selected_ticker = candidates[sel_idx]["ticker"]
+            st.session_state.mcp_tr_candidates = None
+            with st.spinner(f"{selected_ticker} 최신 어닝콜 조회 중..."):
+                _fetch_transcript(selected_ticker)
+
+    # ── 결과 표시 ──
     if st.session_state.mcp_transcript:
         for key, item in st.session_state.mcp_transcript.items():
             st.success(f"🎯 **{item['ticker']} {item['quarter']} 어닝콜 요약 완료**")
@@ -1487,14 +1556,14 @@ def render_tab_mcp_fragment():
                 st.text(item.get("raw_preview", ""))
             st.write("---")
     else:
-        st.caption("종목 티커를 입력하면 최신 어닝콜 트랜스크립트를 AI로 요약합니다.")
+        st.caption("티커(AAPL) 또는 기업명(애플, 구글 등)을 입력하면 최신 어닝콜을 AI로 요약합니다.")
 
 
 # ==========================================
 # 📌 메인 앱 렌더링
 # ==========================================
 def main():
-    st.set_page_config(page_title="News Prism V10.5", page_icon="💎", layout="wide")
+    st.set_page_config(page_title="News Prism V10.7", page_icon="💎", layout="wide")
 
     st.markdown("""
         <style>
