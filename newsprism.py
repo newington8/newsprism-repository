@@ -1140,12 +1140,25 @@ def render_tab_mcp_fragment():
                         pass
                 if not _valid:
                     return None
-                return {
+                _result = {
                     "gainers":   sorted(_valid, key=lambda x: x["pct"],    reverse=True)[:5],
                     "losers":    sorted(_valid, key=lambda x: x["pct"])[:5],
                     "by_amount": sorted(_valid, key=lambda x: x["amount"], reverse=True)[:5],
                     "by_volume": sorted(_valid, key=lambda x: x["volume"], reverse=True)[:5],
                 }
+                # 상위 종목 1일 intraday (5분봉) 수집
+                _top_tks = list({item["ticker"] for lst in _result.values() for item in lst})
+                _intra = {}
+                for _tk2 in _top_tks:
+                    try:
+                        _id = yf.Ticker(_tk2).history(period="1d", interval="5m")
+                        _intra[_tk2] = _id["Close"].dropna().tolist()
+                    except Exception:
+                        _intra[_tk2] = []
+                for lst in _result.values():
+                    for item in lst:
+                        item["closes_1d"] = _intra.get(item["ticker"], [])
+                return _result
 
             st.session_state.mcp_gainers = _fetch_sp500_highlights()
 
@@ -1371,13 +1384,19 @@ def render_tab_mcp_fragment():
             sub   = amt_s if metric == "amount" else vol_s
             sub_label = "거래대금" if metric == "amount" else "거래량"
 
-            st.markdown(
-                f"**{name}** &nbsp; `{tk}`  \n"
-                f"${item['price']:,.2f} &nbsp; "
-                f"<span style='color:{clr}'>**{sign}{pct:.2f}%**</span>  \n"
-                f"<small>{sub_label}: {sub}</small>",
-                unsafe_allow_html=True
-            )
+            c_text, c_spark = st.columns([3, 1])
+            with c_text:
+                st.markdown(
+                    f"**{name}** &nbsp; `{tk}`  \n"
+                    f"${item['price']:,.2f} &nbsp; "
+                    f"<span style='color:{clr}'>**{sign}{pct:.2f}%**</span>  \n"
+                    f"<small>{sub_label}: {sub}</small>",
+                    unsafe_allow_html=True
+                )
+            with c_spark:
+                _sp = _make_sparkline(item.get("closes_1d", []), width=80, height=30)
+                if _sp:
+                    st.markdown(_sp, unsafe_allow_html=True)
             st.write("")
 
         # 상단: 상승 | 하락
