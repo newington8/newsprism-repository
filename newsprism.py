@@ -1102,11 +1102,11 @@ def render_tab_mcp_fragment():
     )
     if needs_load:
         with st.spinner("📡 마켓 데이터 로딩 중... (잠시만 기다려 주세요)"):
-            # ── S&P 500 전체 yfinance 배치 다운로드 → Gainers/Losers/Active 직접 계산 ──
-            def _fetch_sp500_movers():
+            # ── S&P 500 HIGHLIGHTS: yfinance 배치 → 4개 리스트 계산 ──
+            def _fetch_sp500_highlights():
                 _sp500 = list(get_sp500_tickers())
                 if not _sp500:
-                    return {}
+                    return None
                 try:
                     _raw = yf.download(
                         _sp500, period="5d", interval="1d",
@@ -1115,7 +1115,7 @@ def render_tab_mcp_fragment():
                     )
                 except Exception as _e:
                     print(f"[Error] yfinance download 실패: {_e}")
-                    return {}
+                    return None
                 _valid = []
                 for _tk in _sp500:
                     try:
@@ -1127,22 +1127,27 @@ def render_tab_mcp_fragment():
                         _prev = float(_closes.iloc[-2])
                         _vol  = int(_vols.iloc[-1]) if len(_vols) > 0 else 0
                         _pct  = (_last - _prev) / _prev * 100 if _prev else 0
-                        _chg  = _last - _prev
+                        _amt  = _last * _vol
                         _valid.append({
-                            "ticker":            _tk,
-                            "price":             f"{_last:.2f}",
-                            "volume":            str(_vol),
-                            "change_percentage": f"{_pct:+.2f}%",
-                            "change_amount":     f"{_chg:+.2f}",
+                            "ticker": _tk,
+                            "price":  _last,
+                            "volume": _vol,
+                            "amount": _amt,
+                            "pct":    _pct,
+                            "chg":    _last - _prev,
                         })
                     except Exception:
                         pass
-                _g = sorted(_valid, key=lambda x: float(x["change_percentage"].rstrip('%')), reverse=True)[:15]
-                _l = sorted(_valid, key=lambda x: float(x["change_percentage"].rstrip('%')))[:15]
-                _a = sorted(_valid, key=lambda x: int(x["volume"]), reverse=True)[:15]
-                return {"top_gainers": _g, "top_losers": _l, "most_actively_traded": _a}
+                if not _valid:
+                    return None
+                return {
+                    "gainers":   sorted(_valid, key=lambda x: x["pct"],    reverse=True)[:5],
+                    "losers":    sorted(_valid, key=lambda x: x["pct"])[:5],
+                    "by_amount": sorted(_valid, key=lambda x: x["amount"], reverse=True)[:5],
+                    "by_volume": sorted(_valid, key=lambda x: x["volume"], reverse=True)[:5],
+                }
 
-            st.session_state.mcp_gainers = _fetch_sp500_movers()
+            st.session_state.mcp_gainers = _fetch_sp500_highlights()
 
             def _fred_csv(series_id):
                 """FRED 공개 CSV 데이터 (API 키 불필요)"""
@@ -1344,78 +1349,79 @@ def render_tab_mcp_fragment():
         st.caption("워치리스트 데이터를 불러오는 중...")
     st.write("---")
 
-    # ── 섹션 1: TOP GAINERS / LOSERS / MOST ACTIVE ────────────
-    st.markdown("#### 📊 TOP GAINERS / LOSERS / MOST ACTIVE (S&P 500)")
-    data = st.session_state.mcp_gainers or {}
-    if "Information" in data:
-        st.warning(data["Information"])
-    elif "error" in data:
-        st.error(data["error"])
+    # ── 섹션 1: S&P 500 HIGHLIGHTS ────────────────────────────
+    st.markdown("#### 🏆 S&P 500 HIGHLIGHTS")
+    hl = st.session_state.mcp_gainers
+    if not hl:
+        st.caption("⏳ 데이터 로딩 중이거나 장 마감 상태입니다.")
     else:
-        _names  = st.session_state.get('mcp_ticker_names', {})
+        _names = st.session_state.get('mcp_ticker_names', {})
 
-        def _fmt_vol(v):
-            try:
-                v = int(v)
-                return f"{v/1e6:.1f}M" if v >= 1e6 else f"{v/1e3:.0f}K"
-            except Exception:
-                return str(v)
+        def _hl_item(item, sec, metric="pct"):
+            tk    = item["ticker"]
+            nm    = _names.get(tk, tk)
+            label = nm if nm != tk else tk
+            pct   = item["pct"]
+            clr   = "#ef5350" if pct >= 0 else "#26a69a"
+            sign  = "+" if pct >= 0 else ""
+            vol   = item["volume"]
+            amt   = item["amount"]
+            vol_s = f"{vol/1e6:.1f}M" if vol >= 1e6 else f"{vol/1e3:.0f}K"
+            amt_s = f"${amt/1e9:.1f}B" if amt >= 1e9 else f"${amt/1e6:.0f}M"
+            sub   = amt_s if metric == "amount" else vol_s
+            sub_label = "거래대금" if metric == "amount" else "거래량"
 
-        def _render_items(items, limit=10, sec=""):
-            shown = 0
-            for item in items:
-                ticker = item['ticker']
-                try:
-                    price_val = float(item.get('price', 0))
-                    vol_val   = int(item.get('volume', 0))
-                except Exception:
-                    continue
-                name  = _names.get(ticker, ticker)
-                pct   = item.get("change_percentage", "")
-                vol   = _fmt_vol(vol_val)
-                label = name if name != ticker else ticker
-                # 종목 정보 + 기업 개요 버튼
-                c_info, c_btn = st.columns([5, 2])
-                with c_info:
-                    st.markdown(f"**{label}**  \n`{ticker}` · ${price_val:.2f} · `{pct}` · {vol}")
-                with c_btn:
-                    if st.button("📋 기업 개요", key=f"brief_{sec}_{ticker}", use_container_width=True):
-                        if ticker not in st.session_state.mcp_brief:
-                            with st.spinner(f"{ticker} 기업 개요 생성 중..."):
-                                _prompt = f"""미국 상장 기업 {ticker} ({label})에 대해 한국어로 간결하게 브리핑해줘.
+            c_info, c_btn = st.columns([5, 2])
+            with c_info:
+                st.markdown(
+                    f"**{label}** `{tk}`  \n"
+                    f"${item['price']:,.2f} &nbsp; "
+                    f"<span style='color:{clr}'>**{sign}{pct:.2f}%**</span>  \n"
+                    f"<small>{sub_label}: {sub}</small>",
+                    unsafe_allow_html=True
+                )
+            with c_btn:
+                if st.button("📋 개요", key=f"hl_{sec}_{tk}", use_container_width=True):
+                    if tk not in st.session_state.mcp_brief:
+                        with st.spinner(f"{tk} 기업 개요 생성 중..."):
+                            _p = f"""미국 상장 기업 {tk} ({label})에 대해 한국어로 간결하게 브리핑해줘.
 아래 항목을 포함해서 5~7문장으로 작성해:
 - 주요 사업 및 핵심 제품/서비스
 - 시장 포지션 및 주요 경쟁사
 - 최근 이슈 또는 성장 동력
 - 투자 관점에서의 특징 (성장주/가치주/배당주 등)"""
-                                try:
-                                    _resp = client.models.generate_content(model="gemini-2.0-flash", contents=_prompt)
-                                    st.session_state.mcp_brief[ticker] = _resp.text
-                                except Exception as _e:
-                                    st.session_state.mcp_brief[ticker] = f"기업 개요 생성 실패: {_e}"
-                # 캐싱된 기업 개요 표시
-                if ticker in st.session_state.mcp_brief:
-                    with st.expander(f"📄 {label} 기업 개요", expanded=True):
-                        st.write(st.session_state.mcp_brief[ticker])
-                shown += 1
-                if shown >= limit:
-                    break
-            if shown == 0:
-                st.caption("조건에 맞는 종목 없음")
+                            try:
+                                _r = client.models.generate_content(model="gemini-2.0-flash", contents=_p)
+                                st.session_state.mcp_brief[tk] = _r.text
+                            except Exception as _e:
+                                st.session_state.mcp_brief[tk] = f"생성 실패: {_e}"
+            if tk in st.session_state.mcp_brief:
+                with st.expander(f"📄 {label} 기업 개요", expanded=True):
+                    st.write(st.session_state.mcp_brief[tk])
 
-        col_g, col_l, col_a = st.columns(3)
+        # 상단: 상승 | 하락
+        col_g, col_l = st.columns(2)
         with col_g:
-            st.markdown("**🟢 Top Gainers**")
-            st.caption("S&P 500 기업 한정")
-            _render_items(data.get("top_gainers", []), sec="g")
+            st.markdown("**🚀 Top 5 Gainers** (일간 등락률)")
+            for _it in hl.get("gainers", []):
+                _hl_item(_it, sec="g")
         with col_l:
-            st.markdown("**🔴 Top Losers**")
-            st.caption("S&P 500 기업 한정")
-            _render_items(data.get("top_losers", []), sec="l")
+            st.markdown("**📉 Top 5 Losers** (일간 등락률)")
+            for _it in hl.get("losers", []):
+                _hl_item(_it, sec="l")
+
+        st.write("")
+
+        # 하단: 거래대금 | 거래량
+        col_a, col_v = st.columns(2)
         with col_a:
-            st.markdown("**🔵 Most Active**")
-            st.caption("S&P 500 기업 한정")
-            _render_items(data.get("most_actively_traded", []), sec="a")
+            st.markdown("**💰 Most Active (거래대금)**")
+            for _it in hl.get("by_amount", []):
+                _hl_item(_it, sec="a", metric="amount")
+        with col_v:
+            st.markdown("**📊 Most Active (거래량)**")
+            for _it in hl.get("by_volume", []):
+                _hl_item(_it, sec="v", metric="volume")
     st.write("---")
 
     # ── 섹션 2: 거시경제 지표 ──────────────────────────────────
