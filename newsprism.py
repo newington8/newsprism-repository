@@ -1044,6 +1044,7 @@ def render_tab_mcp_fragment():
         ('mcp_insider', {}), ('mcp_transcript', {}), ('mcp_ticker_names', {}),
         ('mcp_brief', {}), ('mcp_tr_candidates', None), ('mcp_tr_query', ''),
         ('mcp_cal_selected', None), ('mcp_cal_data', {}),
+        ('mcp_watchlist', None),
     ]:
         if _k not in st.session_state:
             st.session_state[_k] = _v
@@ -1166,12 +1167,116 @@ def render_tab_mcp_fragment():
                 for t in _unknown:
                     st.session_state.mcp_ticker_names.setdefault(t, t)
 
+            # ── 관심종목 워치리스트 수집 ──
+            _WATCHLIST = [
+                ("VIX",     "^VIX",  "CBOE 변동성 지수"),
+                ("CLmain",  "CL=F",  "WTI 원유 선물"),
+                ("KORU",    "KORU",  "Direxion 한국 불 3X ETF"),
+                ("EWY",     "EWY",   "iShares MSCI 한국 ETF"),
+                ("LABU",    "LABU",  "Direxion S&P 바이오텍 3X ETF"),
+                ("USDKRW",  "KRW=X", "달러/원 환율"),
+                ("IBBQ",    "IBBQ",  "Invesco 나스닥 바이오 ETF"),
+                ("SOX",     "^SOX",  "필라델피아 반도체 지수"),
+                ("SOXX",    "SOXX",  "iShares 반도체 ETF"),
+                ("SOXL",    "SOXL",  "Direxion 반도체 3X ETF"),
+            ]
+            _wl_rows = []
+            for _sym, _tk, _nm in _WATCHLIST:
+                try:
+                    _th = yf.Ticker(_tk).history(period="1mo")
+                    if _th.empty:
+                        continue
+                    _closes = _th['Close'].dropna().tolist()
+                    _last   = _closes[-1]
+                    _prev   = _closes[-2] if len(_closes) >= 2 else _last
+                    _chg    = _last - _prev
+                    _pct    = _chg / _prev * 100 if _prev else 0
+                    _wl_rows.append({"symbol": _sym, "name": _nm, "closes": _closes,
+                                     "last": _last, "change": _chg, "pct": _pct})
+                except Exception:
+                    pass
+            st.session_state.mcp_watchlist = _wl_rows
+
             st.session_state.mcp_last_loaded  = _time.time()
 
     # ── 헤더 ──
     last_dt = datetime.fromtimestamp(st.session_state.mcp_last_loaded, tz=pytz.timezone('Asia/Seoul'))
     st.markdown("### 🚀 Alpha Vantage 실시간 마켓 대시보드")
     st.caption(f"🕐 마지막 업데이트: {last_dt.strftime('%Y-%m-%d %H:%M')} KST  ·  5분마다 자동 갱신")
+    st.write("---")
+
+    # ── 섹션 0: 관심종목 워치리스트 ───────────────────────────
+    st.markdown("#### 👁️ 관심종목 워치리스트")
+
+    def _make_sparkline(closes, width=90, height=32):
+        if not closes or len(closes) < 2:
+            return ""
+        mn, mx = min(closes), max(closes)
+        rng = mx - mn or 1
+        pts = []
+        for i, p in enumerate(closes):
+            x = i / (len(closes) - 1) * width
+            y = height - (p - mn) / rng * (height - 4) - 2
+            pts.append(f"{x:.1f},{y:.1f}")
+        color = "#ef5350" if closes[-1] >= closes[0] else "#26a69a"
+        return (
+            f'<svg width="{width}" height="{height}" style="vertical-align:middle;display:block;">'
+            f'<polyline points="{" ".join(pts)}" fill="none" stroke="{color}" stroke-width="1.5" stroke-linejoin="round"/>'
+            f'</svg>'
+        )
+
+    _wl = st.session_state.mcp_watchlist or []
+    if _wl:
+        _rows_html = ""
+        for _r in _wl:
+            _up   = _r["pct"] >= 0
+            _clr  = "#ef5350" if _up else "#26a69a"
+            _sign = "+" if _up else ""
+            _spark = _make_sparkline(_r["closes"])
+            _last_str = f"{_r['last']:,.2f}"
+            _chg_str  = f"{_sign}{_r['change']:,.2f}"
+            _pct_str  = f"{_sign}{_r['pct']:.2f}%"
+            _rows_html += f"""
+            <tr>
+                <td class="wl-sym">{_r['symbol']}</td>
+                <td class="wl-name">{_r['name']}</td>
+                <td class="wl-spark">{_spark}</td>
+                <td class="wl-num">{_last_str}</td>
+                <td class="wl-num" style="color:{_clr}">{_chg_str}</td>
+                <td class="wl-num" style="color:{_clr}"><b>{_pct_str}</b></td>
+            </tr>"""
+
+        st.markdown(f"""
+        <style>
+            .wl-wrap {{ overflow-x:auto; }}
+            .wl-tbl {{ width:100%; border-collapse:collapse; font-family:'Segoe UI',sans-serif; font-size:13px; }}
+            .wl-tbl th {{ color:#888; font-weight:500; padding:7px 12px; border-bottom:1px solid #333;
+                          text-align:left; white-space:nowrap; }}
+            .wl-tbl th.wl-r {{ text-align:right; }}
+            .wl-tbl td {{ padding:6px 12px; border-bottom:1px solid #1e1e1e; vertical-align:middle; }}
+            .wl-sym  {{ font-weight:700; font-size:13px; white-space:nowrap; }}
+            .wl-name {{ color:#999; font-size:12px; white-space:nowrap; }}
+            .wl-spark {{ padding:4px 12px; }}
+            .wl-num  {{ text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; font-size:13px; }}
+        </style>
+        <div class="wl-wrap">
+        <table class="wl-tbl">
+            <thead>
+                <tr>
+                    <th>Symbol</th>
+                    <th>Name</th>
+                    <th>Sparkline</th>
+                    <th class="wl-r">Last</th>
+                    <th class="wl-r">Change</th>
+                    <th class="wl-r">% Change ↕</th>
+                </tr>
+            </thead>
+            <tbody>{_rows_html}</tbody>
+        </table>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.caption("워치리스트 데이터를 불러오는 중...")
     st.write("---")
 
     # ── 섹션 1: TOP GAINERS / LOSERS / MOST ACTIVE ────────────
