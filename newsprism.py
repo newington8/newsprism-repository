@@ -1063,6 +1063,8 @@ def render_tab_mcp_fragment():
         ('mcp_brief', {}), ('mcp_tr_candidates', None), ('mcp_tr_query', ''),
         ('mcp_cal_selected', None), ('mcp_cal_data', {}),
         ('mcp_watchlist', None),
+        ('mcp_chart_sp', None), ('mcp_chart_nq', None),
+        ('mcp_timeline', ''), ('mcp_events', []), ('mcp_news_raw', ''),
     ]:
         if _k not in st.session_state:
             st.session_state[_k] = _v
@@ -1277,12 +1279,138 @@ def render_tab_mcp_fragment():
                     pass
             st.session_state.mcp_watchlist = _wl_rows
 
+            # ── 24h 차트 데이터 ──
+            st.session_state.mcp_chart_sp = yf.Ticker("^GSPC").history(period="1d", interval="5m")
+            st.session_state.mcp_chart_nq = yf.Ticker("NQ=F").history(period="1d", interval="5m")
+
             st.session_state.mcp_last_loaded  = _time.time()
 
     # ── 헤더 ──
     last_dt = datetime.fromtimestamp(st.session_state.mcp_last_loaded, tz=pytz.timezone('Asia/Seoul'))
     st.markdown("### 🚀 Alpha Vantage 실시간 마켓 대시보드")
     st.caption(f"🕐 마지막 업데이트: {last_dt.strftime('%Y-%m-%d %H:%M')} KST  ·  5분마다 자동 갱신")
+    st.write("---")
+
+    # ── 섹션 0-A: S&P500 · NQ 24h 차트 ───────────────────────
+    try:
+        import plotly.graph_objects as go
+        _plotly_ok = True
+    except ImportError:
+        _plotly_ok = False
+
+    def _build_chart(hist, title, color):
+        if hist is None or hist.empty:
+            return None
+        try:
+            _et  = pytz.timezone('America/New_York')
+            _idx = hist.index.tz_convert(_et) if hist.index.tzinfo else hist.index.tz_localize('UTC').tz_convert(_et)
+            _cls = hist['Close'].tolist()
+            fig  = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=_idx, y=_cls, mode='lines',
+                line=dict(color=color, width=1.5),
+                hovertemplate='%{x|%H:%M ET}<br><b>%{y:,.2f}</b><extra></extra>'
+            ))
+            # 이벤트 오버레이
+            for _evt_dt, _evt_desc in st.session_state.mcp_events:
+                fig.add_vline(
+                    x=_evt_dt.timestamp() * 1000,
+                    line=dict(color='#FFD600', width=1.2, dash='dash'),
+                    annotation_text=_evt_desc[:18] + '…' if len(_evt_desc) > 18 else _evt_desc,
+                    annotation_font_size=10,
+                    annotation_font_color='#FFD600',
+                )
+            fig.update_layout(
+                title=dict(text=title, font=dict(size=14)),
+                height=360,
+                margin=dict(l=55, r=15, t=40, b=40),
+                xaxis=dict(tickformat='%H:%M', showgrid=True, gridcolor='#333', title='시간 (ET)'),
+                yaxis=dict(showgrid=True, gridcolor='#333', tickformat=',.0f', title='포인트'),
+                hovermode='x unified',
+                template='plotly_dark',
+                showlegend=False,
+            )
+            return fig
+        except Exception as _e:
+            print(f"[Error] 차트 생성 실패: {_e}")
+            return None
+
+    st.markdown("#### 📊 S&P 500 · NQ Futures — 24h 차트")
+    _col_sp, _col_nq = st.columns(2)
+    if not _plotly_ok:
+        st.warning("plotly 라이브러리가 필요합니다. requirements.txt를 확인해주세요.")
+    else:
+        with _col_sp:
+            _fig_sp = _build_chart(st.session_state.mcp_chart_sp, "S&P 500  (^GSPC)", "#2196F3")
+            if _fig_sp:
+                st.plotly_chart(_fig_sp, use_container_width=True)
+            else:
+                st.caption("S&P 500 데이터 없음 (장 마감 또는 로딩 중)")
+        with _col_nq:
+            _fig_nq = _build_chart(st.session_state.mcp_chart_nq, "NQ Futures  (NQ=F)", "#FF9800")
+            if _fig_nq:
+                st.plotly_chart(_fig_nq, use_container_width=True)
+            else:
+                st.caption("NQ Futures 데이터 없음 (장 마감 또는 로딩 중)")
+
+    # ── 섹션 0-B: 시황 뉴스 타임라인 분석 ────────────────────
+    st.markdown("#### 📋 시황 뉴스 타임라인 분석")
+    _news_input = st.text_area(
+        "Yahoo Finance 등 시황 뉴스를 붙여넣으세요",
+        value=st.session_state.mcp_news_raw,
+        height=180,
+        placeholder="뉴스 본문을 여기에 붙여넣은 후 아래 버튼을 클릭하세요...",
+        label_visibility="collapsed"
+    )
+    if st.button("🧠 Gemini 타임라인 요약", use_container_width=True, key="mcp_timeline_btn"):
+        if _news_input.strip():
+            st.session_state.mcp_news_raw = _news_input
+            with st.spinner("Gemini가 타임라인을 분석 중입니다..."):
+                _tl_prompt = f"""당신은 미국 금융시장 전문 애널리스트입니다.
+아래는 미국 증시 시황과 관련된 뉴스 텍스트입니다. 이 내용을 분석하여 타임라인 형식으로 정리하세요.
+
+[★ 출력 형식 — 반드시 준수 ★]
+[HH:MM] 이벤트 제목 (한 줄, 핵심만)
+- 핵심: 수치·통계·데이터 중심 요약 (2~3문장)
+- 발언: "인물명: 인용문" (있는 경우에만 작성)
+- 시장 반응: S&P500·나스닥 즉각 반응 (파악 가능한 경우에만 작성)
+
+[작성 원칙]
+1. 반드시 [HH:MM] 형식 타임스탬프로 시작 — 명시된 시간 우선, 없으면 문맥 추론
+2. %, 달러($), 베이시스포인트(bp), 고용자수(만명) 등 모든 수치 반드시 포함
+3. 우선순위: 연준·FOMC 발언 > CPI·NFP·PCE 등 경제지표 > 기업 실적·이슈 > 지정학
+4. 시간 오름차순 정렬 (가장 오래된 이벤트 → 최신 순)
+5. 광고, 구독 유도, 무관 컨텐츠 완전 제외
+6. 전체 한국어로 작성
+
+[원본 뉴스]
+{_news_input}"""
+                try:
+                    _tl_resp = client.models.generate_content(model='gemini-2.5-flash', contents=_tl_prompt)
+                    _tl_text = _tl_resp.text
+                    st.session_state.mcp_timeline = _tl_text
+                    # 이벤트 파싱 → [HH:MM] 추출
+                    _et_tz   = pytz.timezone('America/New_York')
+                    _today   = datetime.now(_et_tz)
+                    _evts    = []
+                    for _m in re.finditer(r'\[(\d{1,2}:\d{2})\]\s*(.+)', _tl_text):
+                        try:
+                            _h, _mi = map(int, _m.group(1).split(':'))
+                            _dt_evt = _today.replace(hour=_h, minute=_mi, second=0, microsecond=0)
+                            _evts.append((_dt_evt, _m.group(2).strip()))
+                        except Exception:
+                            pass
+                    st.session_state.mcp_events = _evts
+                except Exception as _te:
+                    st.error(f"Gemini 요약 실패: {_te}")
+        else:
+            st.warning("뉴스 텍스트를 먼저 붙여넣어 주세요.")
+
+    if st.session_state.mcp_timeline:
+        with st.expander("📊 타임라인 요약 보기", expanded=True):
+            st.markdown(st.session_state.mcp_timeline)
+        if st.session_state.mcp_events:
+            st.caption(f"✅ {len(st.session_state.mcp_events)}개 이벤트 파싱 완료 → 위 차트에 반영됨")
     st.write("---")
 
     # ── 섹션 0: 관심종목 워치리스트 ───────────────────────────
