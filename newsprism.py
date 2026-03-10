@@ -1387,11 +1387,9 @@ def render_tab_mcp_fragment():
             c_text, c_spark = st.columns([3, 1])
             with c_text:
                 st.markdown(
-                    f"<b>{name}</b> &nbsp; <code>{tk}</code><br>"
-                    f"${item['price']:,.2f} &nbsp; "
-                    f"<span style='color:{clr}'><b>{sign}{pct:.2f}%</b></span><br>"
-                    f"<small>{sub_label}: {sub}</small>",
-                    unsafe_allow_html=True
+                    f"**{name}** `{tk}`  \n"
+                    f"${item['price']:,.2f} · **{sign}{pct:.2f}%**  \n"
+                    f"*{sub_label}: {sub}*"
                 )
             with c_spark:
                 _sp = _make_sparkline(item.get("closes_1d", []), width=80, height=30)
