@@ -1393,7 +1393,7 @@ def render_tab_mcp_fragment():
                     _et_tz   = pytz.timezone('America/New_York')
                     _today   = datetime.now(_et_tz)
                     _evts    = []
-                    for _m in re.finditer(r'\[(\d{1,2}:\d{2})\]\s*(.+)', _tl_text):
+                    for _m in re.finditer(r'\[(?:\d{4}-\d{2}-\d{2}\s+)?(\d{1,2}:\d{2})\]\s*(.+)', _tl_text):
                         try:
                             _h, _mi = map(int, _m.group(1).split(':'))
                             _dt_evt = _today.replace(hour=_h, minute=_mi, second=0, microsecond=0)
