@@ -1399,21 +1399,15 @@ def render_tab_mcp_fragment():
                     st.markdown(_sp, unsafe_allow_html=True)
             st.write("")
 
-        # 상단: 상승 | 하락
-        col_g, col_l = st.columns(2)
+        col_g, col_l, col_a, col_v = st.columns(4)
         with col_g:
-            st.markdown("**🚀 Top 5 Gainers** (일간 등락률)")
+            st.markdown("**🚀 Top 5 Gainers**")
             for _it in hl.get("gainers", []):
                 _hl_item(_it, sec="g")
         with col_l:
-            st.markdown("**📉 Top 5 Losers** (일간 등락률)")
+            st.markdown("**📉 Top 5 Losers**")
             for _it in hl.get("losers", []):
                 _hl_item(_it, sec="l")
-
-        st.write("")
-
-        # 하단: 거래대금 | 거래량
-        col_a, col_v = st.columns(2)
         with col_a:
             st.markdown("**💰 Most Active (거래대금)**")
             for _it in hl.get("by_amount", []):
