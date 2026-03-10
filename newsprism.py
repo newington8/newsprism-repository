@@ -1311,10 +1311,17 @@ def render_tab_mcp_fragment():
                 line=dict(color=color, width=1.5),
                 hovertemplate='%{x|%H:%M ET}<br><b>%{y:,.2f}</b><extra></extra>'
             ))
-            # 이벤트 오버레이
+            # 이벤트 오버레이 (차트 시간 범위 내 이벤트만)
+            _x_min = _idx.min()
+            _x_max = _idx.max()
             for _evt_dt, _evt_desc in st.session_state.mcp_events:
+                # 차트 x축과 동일한 timezone으로 맞추기
+                _et = pytz.timezone('America/New_York')
+                _evt_et = _evt_dt.astimezone(_et) if _evt_dt.tzinfo else _et.localize(_evt_dt)
+                if not (_x_min <= _evt_et <= _x_max):
+                    continue
                 fig.add_vline(
-                    x=_evt_dt.timestamp() * 1000,
+                    x=_evt_et.strftime('%Y-%m-%d %H:%M:%S'),
                     line=dict(color='#FFD600', width=1.2, dash='dash'),
                     annotation_text=_evt_desc[:18] + '…' if len(_evt_desc) > 18 else _evt_desc,
                     annotation_font_size=10,
@@ -1389,15 +1396,31 @@ def render_tab_mcp_fragment():
                     _tl_resp = client.models.generate_content(model='gemini-2.5-flash', contents=_tl_prompt)
                     _tl_text = _tl_resp.text
                     st.session_state.mcp_timeline = _tl_text
-                    # 이벤트 파싱 → [HH:MM] 추출
+                    # 이벤트 파싱 → [HH:MM] 또는 [YYYY-MM-DD HH:MM] 추출
                     _et_tz   = pytz.timezone('America/New_York')
                     _today   = datetime.now(_et_tz)
+                    # 차트 데이터 시간 범위 계산 (SP500 기준, 없으면 오늘 사용)
+                    _chart_min = None
+                    _chart_max = None
+                    _sp_data = st.session_state.get('mcp_chart_sp')
+                    if _sp_data is not None and not _sp_data.empty:
+                        _cidx = _sp_data.index.tz_convert(_et_tz) if _sp_data.index.tzinfo else _sp_data.index.tz_localize('UTC').tz_convert(_et_tz)
+                        _chart_min = _cidx.min()
+                        _chart_max = _cidx.max()
                     _evts    = []
-                    for _m in re.finditer(r'\[(?:\d{4}-\d{2}-\d{2}\s+)?(\d{1,2}:\d{2})\]\s*(.+)', _tl_text):
+                    for _m in re.finditer(r'\[(?:(\d{4})-(\d{2})-(\d{2})\s+)?(\d{1,2}):(\d{2})\]\s*(.+)', _tl_text):
                         try:
-                            _h, _mi = map(int, _m.group(1).split(':'))
-                            _dt_evt = _today.replace(hour=_h, minute=_mi, second=0, microsecond=0)
-                            _evts.append((_dt_evt, _m.group(2).strip()))
+                            _yr, _mo, _dy = _m.group(1), _m.group(2), _m.group(3)
+                            _h, _mi = int(_m.group(4)), int(_m.group(5))
+                            _desc   = _m.group(6).strip()
+                            if _yr:
+                                # 날짜가 명시된 경우 그대로 사용
+                                _dt_evt = _et_tz.localize(datetime(int(_yr), int(_mo), int(_dy), _h, _mi, 0))
+                            else:
+                                # 날짜 없는 [HH:MM] → 차트 범위 내 날짜로 추론
+                                _base = _chart_min.date() if _chart_min else _today.date()
+                                _dt_evt = _et_tz.localize(datetime(_base.year, _base.month, _base.day, _h, _mi, 0))
+                            _evts.append((_dt_evt, _desc))
                         except Exception:
                             pass
                     st.session_state.mcp_events = _evts
