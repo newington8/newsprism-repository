@@ -1298,7 +1298,7 @@ def render_tab_mcp_fragment():
     except ImportError:
         _plotly_ok = False
 
-    _LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    _LETTERS = [str(i) for i in range(1, 100)]  # 숫자 레이블
 
     def _get_events_in_range(hist):
         """차트 시간 범위 안의 이벤트만 추출 → [(naive_dt, desc), ...]"""
@@ -1346,7 +1346,7 @@ def render_tab_mcp_fragment():
                     _mdescs.append(f"{_lbl}  {_en.strftime('%H:%M')} ET<br>{_desc}")
                     fig.add_shape(
                         type='line', x0=_xs, x1=_xs, y0=0, y1=1, yref='paper',
-                        line=dict(color='#FFD600', width=1, dash='dot'),
+                        line=dict(color='#E53935', width=1, dash='dot'),
                     )
                 fig.add_trace(go.Scatter(
                     x=_mxs,
@@ -1354,9 +1354,9 @@ def render_tab_mcp_fragment():
                     mode='markers+text',
                     text=_mlabels,
                     textposition='middle center',
-                    marker=dict(symbol='square', size=18, color='#FFD600',
-                                line=dict(color='#333', width=1)),
-                    textfont=dict(size=10, color='#222'),
+                    marker=dict(symbol='square', size=20, color='#E53935',
+                                line=dict(color='#fff', width=1)),
+                    textfont=dict(size=11, color='#fff', family='Arial Black'),
                     hovertemplate='%{customdata}<extra></extra>',
                     customdata=_mdescs,
                     showlegend=False,
@@ -1399,16 +1399,16 @@ def render_tab_mcp_fragment():
             else:
                 st.caption("NQ Futures 데이터 없음 (장 마감 또는 로딩 중)")
 
-    # 차트 아래 이벤트 범례 (A - 09:45 Powell said...)
+    # 차트 아래 이벤트 범례
     if _sp_events:
         _legend_rows = ''.join(
-            f"<span style='display:inline-block;background:#FFD600;color:#222;font-weight:bold;"
-            f"font-size:11px;padding:1px 5px;border-radius:3px;margin-right:4px'>{_LETTERS[_i % 26]}</span>"
-            f"<span style='color:#ccc;font-size:12px'>{_en.strftime('%H:%M')} {_desc}</span>"
+            f"<span style='display:inline-block;background:#E53935;color:#fff;font-weight:bold;"
+            f"font-size:11px;padding:1px 6px;border-radius:3px;margin-right:6px'>{_LETTERS[_i]}</span>"
+            f"<b style='color:#000;font-size:13px'>{_en.strftime('%H:%M')} &nbsp;{_desc}</b>"
             f"<br>"
             for _i, (_en, _desc) in enumerate(_sp_events)
         )
-        st.markdown(f"<div style='line-height:1.8;padding:4px 0'>{_legend_rows}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='line-height:2;padding:4px 0'>{_legend_rows}</div>", unsafe_allow_html=True)
 
     # ── 섹션 0-B: 시황 뉴스 타임라인 분석 ────────────────────
     st.markdown("#### 📋 시황 뉴스 타임라인 분석")
