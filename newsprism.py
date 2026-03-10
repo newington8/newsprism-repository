@@ -1304,13 +1304,14 @@ def render_tab_mcp_fragment():
     st.write("---")
 
     # ── 섹션 1: TOP GAINERS / LOSERS / MOST ACTIVE ────────────
-    st.markdown("#### 📊 TOP GAINERS / LOSERS / MOST ACTIVE")
+    st.markdown("#### 📊 TOP GAINERS / LOSERS / MOST ACTIVE (S&P 500)")
     data = st.session_state.mcp_gainers or {}
     if "Information" in data:
         st.warning(data["Information"])
     elif "error" in data:
         st.error(data["error"])
     else:
+        _sp500_set = get_sp500_tickers()
         _names  = st.session_state.get('mcp_ticker_names', {})
 
         def _fmt_vol(v):
@@ -1328,6 +1329,8 @@ def render_tab_mcp_fragment():
                     price_val = float(item.get('price', 0))
                     vol_val   = int(item.get('volume', 0))
                 except Exception:
+                    continue
+                if _sp500_set and ticker not in _sp500_set:
                     continue
                 if price_val < 2.0 or vol_val < 50000:
                     continue
@@ -1367,15 +1370,15 @@ def render_tab_mcp_fragment():
         col_g, col_l, col_a = st.columns(3)
         with col_g:
             st.markdown("**🟢 Top Gainers**")
-            st.caption("NYSE·Nasdaq·NYSE American / ≥$2 / ≥50K vol")
+            st.caption("S&P 500 기업 한정")
             _render_items(data.get("top_gainers", []), sec="g")
         with col_l:
             st.markdown("**🔴 Top Losers**")
-            st.caption("NYSE·Nasdaq·NYSE American / ≥$2 / ≥50K vol")
+            st.caption("S&P 500 기업 한정")
             _render_items(data.get("top_losers", []), sec="l")
         with col_a:
             st.markdown("**🔵 Most Active**")
-            st.caption("NYSE·Nasdaq·NYSE American / ≥$2 / ≥50K vol")
+            st.caption("S&P 500 기업 한정")
             _render_items(data.get("most_actively_traded", []), sec="a")
     st.write("---")
 
