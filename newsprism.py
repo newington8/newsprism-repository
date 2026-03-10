@@ -1387,9 +1387,9 @@ def render_tab_mcp_fragment():
             c_text, c_spark = st.columns([3, 1])
             with c_text:
                 st.markdown(
-                    f"**{name}** &nbsp; `{tk}`  \n"
+                    f"<b>{name}</b> &nbsp; <code>{tk}</code><br>"
                     f"${item['price']:,.2f} &nbsp; "
-                    f"<span style='color:{clr}'>**{sign}{pct:.2f}%**</span>  \n"
+                    f"<span style='color:{clr}'><b>{sign}{pct:.2f}%</b></span><br>"
                     f"<small>{sub_label}: {sub}</small>",
                     unsafe_allow_html=True
                 )
