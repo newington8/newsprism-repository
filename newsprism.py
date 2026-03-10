@@ -427,8 +427,22 @@ def fetch_alpha_vantage_news(sector_name, start_idx, sort="RELEVANCE", use_ticke
         "statnews", "nature.com", "pbs",
     ]
     
+    # 🗑️ 찌라시 섹션 표시 (밈/바이럴성 - 구독자 많고 사람들이 참조함)
     ALPHA_TABLOID_PUBLISHERS = [
-        "fool", "motley fool", "benzinga", "zacks", "seeking alpha", "seekingalpha", "zerohedge"
+        "fool", "motley fool", "benzinga", "zacks", "seeking alpha", "seekingalpha",
+        "zerohedge", "247wallst", "valuewalk", "marketbeat", "tipranks",
+    ]
+
+    # 🚫 완전 폐기 (PR 배포 서비스 / 크립토 타블로이드 / 순수 클릭베이트)
+    ALPHA_DISCARD_PUBLISHERS = [
+        # PR 배포 서비스 (기업 자체 보도자료 - 저널리즘 아님)
+        "globenewswire", "prnewswire", "businesswire", "accesswire", "einpresswire",
+        # 크립토 타블로이드
+        "newsbtc", "bitcoinist", "ambcrypto", "dailyhodl", "beincrypto",
+        "cryptopotato", "u.today", "coingape", "cryptonews", "cryptoslate",
+        # 저품질 금융 블로그 / 클릭베이트
+        "stocknews", "financhill", "finbold", "schaeffersresearch",
+        "pulse2", "simplywallst",
     ]
 
     news_map = {}
@@ -448,7 +462,11 @@ def fetch_alpha_vantage_news(sector_name, start_idx, sort="RELEVANCE", use_ticke
             for item in feed:
                 source_domain = item.get("source_domain", "External").lower()
                 
-                # 찌라시만 걸러내고 나머지는 전부 Gemini에 위임
+                # 3단계 라우팅
+                is_discard = any(t in source_domain for t in ALPHA_DISCARD_PUBLISHERS)
+                if is_discard:
+                    continue  # 완전 폐기
+
                 is_tabloid = any(t in source_domain for t in ALPHA_TABLOID_PUBLISHERS)
 
                 sentiment = item.get("overall_sentiment_label", "Neutral")
@@ -461,7 +479,7 @@ def fetch_alpha_vantage_news(sector_name, start_idx, sort="RELEVANCE", use_ticke
                     "snippet": sanitize_text(item.get('summary', ''))
                 }
 
-                # 투 트랙 라우팅 (찌라시 vs 전체 통과)
+                # 찌라시 vs 일반 통과
                 if is_tabloid:
                     tabloid_list.append({"id": n_id, "title": clean_title})
                 else:
