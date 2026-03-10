@@ -1303,25 +1303,27 @@ def render_tab_mcp_fragment():
             return None
         try:
             _et  = pytz.timezone('America/New_York')
-            _idx = hist.index.tz_convert(_et) if hist.index.tzinfo else hist.index.tz_localize('UTC').tz_convert(_et)
+            # ET로 변환 후 timezone strip → naive ET datetime으로 통일 (Plotly UTC 혼용 방지)
+            _idx_tz = hist.index.tz_convert(_et) if hist.index.tzinfo else hist.index.tz_localize('UTC').tz_convert(_et)
+            _idx = _idx_tz.tz_localize(None)  # naive ET
             _cls = hist['Close'].tolist()
             fig  = go.Figure()
             fig.add_trace(go.Scatter(
                 x=_idx, y=_cls, mode='lines',
                 line=dict(color=color, width=1.5),
-                hovertemplate='%{x|%H:%M ET}<br><b>%{y:,.2f}</b><extra></extra>'
+                hovertemplate='%{x|%H:%M} ET<br><b>%{y:,.2f}</b><extra></extra>'
             ))
-            # 이벤트 오버레이 (차트 시간 범위 내 이벤트만)
-            _x_min = _idx.min()
-            _x_max = _idx.max()
+            # 이벤트 오버레이 (차트 시간 범위 내 이벤트만, naive ET로 비교)
+            _x_min = _idx.min().to_pydatetime()
+            _x_max = _idx.max().to_pydatetime()
             for _evt_dt, _evt_desc in st.session_state.mcp_events:
-                # 차트 x축과 동일한 timezone으로 맞추기
-                _et = pytz.timezone('America/New_York')
+                # naive ET로 변환
                 _evt_et = _evt_dt.astimezone(_et) if _evt_dt.tzinfo else _et.localize(_evt_dt)
-                if not (_x_min <= _evt_et <= _x_max):
+                _evt_naive = _evt_et.replace(tzinfo=None)
+                if not (_x_min <= _evt_naive <= _x_max):
                     continue
                 fig.add_vline(
-                    x=_evt_et.strftime('%Y-%m-%d %H:%M:%S'),
+                    x=_evt_naive.strftime('%Y-%m-%d %H:%M:%S'),
                     line=dict(color='#FFD600', width=1.2, dash='dash'),
                     annotation_text=_evt_desc[:18] + '…' if len(_evt_desc) > 18 else _evt_desc,
                     annotation_font_size=10,
