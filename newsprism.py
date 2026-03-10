@@ -1383,7 +1383,13 @@ def render_tab_mcp_fragment():
         placeholder="뉴스 본문을 여기에 붙여넣은 후 아래 버튼을 클릭하세요...",
         label_visibility="collapsed"
     )
-    if st.button("🧠 Gemini 타임라인 요약", use_container_width=True, key="mcp_timeline_btn"):
+    _btn_col1, _btn_col2 = st.columns([3, 1])
+    with _btn_col1:
+        _do_gemini = st.button("🧠 Gemini 타임라인 요약", use_container_width=True, key="mcp_timeline_btn")
+    with _btn_col2:
+        if st.button("📊 차트 반영", use_container_width=True, key="mcp_chart_apply_btn"):
+            st.rerun(scope="fragment")
+    if _do_gemini:
         if _news_input.strip():
             st.session_state.mcp_news_raw = _news_input
             with st.spinner("Gemini가 타임라인을 분석 중입니다..."):
