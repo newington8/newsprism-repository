@@ -1298,10 +1298,8 @@ def render_tab_mcp_fragment():
     except ImportError:
         _plotly_ok = False
 
-    _LETTERS = [str(i) for i in range(1, 100)]  # 숫자 레이블
-
-    def _get_events_in_range(hist):
-        """차트 시간 범위 안의 이벤트만 추출 → [(naive_dt, desc), ...]"""
+    def _get_events_with_global_idx(hist):
+        """전역 인덱스 유지하며 차트 범위 내 이벤트 추출 → [(global_idx, naive_dt, desc), ...]"""
         if hist is None or hist.empty or not st.session_state.mcp_events:
             return []
         _et = pytz.timezone('America/New_York')
@@ -1309,14 +1307,15 @@ def render_tab_mcp_fragment():
         _mn = _idx_tz.tz_localize(None).min().to_pydatetime()
         _mx = _idx_tz.tz_localize(None).max().to_pydatetime()
         _result = []
-        for _dt, _desc in st.session_state.mcp_events:
+        for _gi, (_dt, _desc) in enumerate(st.session_state.mcp_events):
             _eet = _dt.astimezone(_et) if _dt.tzinfo else _et.localize(_dt)
             _en = _eet.replace(tzinfo=None)
             if _mn <= _en <= _mx:
-                _result.append((_en, _desc))
+                _result.append((_gi, _en, _desc))
         return _result
 
     def _build_chart(hist, title, color, events_in_range):
+        """events_in_range: [(global_idx, naive_dt, desc), ...]"""
         if hist is None or hist.empty:
             return None
         try:
@@ -1331,23 +1330,20 @@ def render_tab_mcp_fragment():
                 hovertemplate='%{x|%H:%M} ET<br><b>%{y:,.2f}</b><extra></extra>',
                 showlegend=False,
             ))
-            # 이벤트 마커 + 세로선
             if events_in_range:
                 _y_top = max(_cls)
                 _y_bot = min(_cls)
-                _y_pad = (_y_top - _y_bot) * 0.03
-                _marker_y = _y_top + _y_pad
+                _marker_y = _y_top + (_y_top - _y_bot) * 0.03
                 _mxs, _mdescs = [], []
-                for _i, (_en, _desc) in enumerate(events_in_range):
+                for _gi, _en, _desc in events_in_range:
+                    _lbl = str(_gi + 1)  # 전역 번호 (1부터 시작)
                     _xs = _en.strftime('%Y-%m-%d %H:%M:%S')
-                    _lbl = _LETTERS[_i]
                     _mxs.append(_xs)
                     _mdescs.append(f"<b>{_lbl}</b>  {_en.strftime('%H:%M')} ET<br>{_desc}")
                     fig.add_shape(
                         type='line', x0=_xs, x1=_xs, y0=0, y1=1, yref='paper',
                         line=dict(color='#E53935', width=1, dash='dot'),
                     )
-                    # 숫자 라벨: add_annotation으로 깔끔하게 렌더링
                     fig.add_annotation(
                         x=_xs, y=1.0, yref='paper',
                         text=f"<b>{_lbl}</b>",
@@ -1358,10 +1354,8 @@ def render_tab_mcp_fragment():
                         xanchor='center',
                         yanchor='bottom',
                     )
-                # 투명 scatter → hover 전용
                 fig.add_trace(go.Scatter(
-                    x=_mxs,
-                    y=[_marker_y] * len(_mxs),
+                    x=_mxs, y=[_marker_y] * len(_mxs),
                     mode='markers',
                     marker=dict(symbol='square', size=20, color='rgba(0,0,0,0)'),
                     hovertemplate='%{customdata}<extra></extra>',
@@ -1373,8 +1367,7 @@ def render_tab_mcp_fragment():
                 height=380,
                 margin=dict(l=55, r=15, t=40, b=40),
                 xaxis=dict(tickformat='%H:%M', showgrid=True, gridcolor='#333', title='시간 (ET)'),
-                yaxis=dict(showgrid=True, gridcolor='#333', tickformat=',.0f', title='포인트',
-                           autorange=True),
+                yaxis=dict(showgrid=True, gridcolor='#333', tickformat=',.0f', title='포인트', autorange=True),
                 hovermode='x unified',
                 template='plotly_dark',
                 showlegend=False,
@@ -1384,9 +1377,8 @@ def render_tab_mcp_fragment():
             print(f"[Error] 차트 생성 실패: {_e}")
             return None
 
-    # SP500 기준으로 이벤트 범위 계산 (범례 표시용)
-    _sp_events = _get_events_in_range(st.session_state.get('mcp_chart_sp'))
-    _nq_events = _get_events_in_range(st.session_state.get('mcp_chart_nq'))
+    _sp_events = _get_events_with_global_idx(st.session_state.get('mcp_chart_sp'))
+    _nq_events = _get_events_with_global_idx(st.session_state.get('mcp_chart_nq'))
 
     st.markdown("#### 📊 S&P 500 · NQ Futures — 24h 차트")
     _col_sp, _col_nq = st.columns(2)
@@ -1406,14 +1398,15 @@ def render_tab_mcp_fragment():
             else:
                 st.caption("NQ Futures 데이터 없음 (장 마감 또는 로딩 중)")
 
-    # 차트 아래 이벤트 범례
-    if _sp_events:
+    # 차트 아래 통합 범례 (SP+NQ 합집합, 전역 번호 기준 정렬)
+    _all_shown = {_gi: (_en, _desc) for _gi, _en, _desc in (_sp_events + _nq_events)}
+    if _all_shown:
         _legend_rows = ''.join(
             f"<span style='display:inline-block;background:#E53935;color:#fff;font-weight:bold;"
-            f"font-size:11px;padding:1px 6px;border-radius:3px;margin-right:6px'>{_LETTERS[_i]}</span>"
+            f"font-size:11px;padding:1px 6px;border-radius:3px;margin-right:6px'>{_gi + 1}</span>"
             f"<b style='color:#000;font-size:13px'>{_en.strftime('%H:%M')} &nbsp;{_desc}</b>"
             f"<br>"
-            for _i, (_en, _desc) in enumerate(_sp_events)
+            for _gi, (_en, _desc) in sorted(_all_shown.items())
         )
         st.markdown(f"<div style='line-height:2;padding:4px 0'>{_legend_rows}</div>", unsafe_allow_html=True)
 
