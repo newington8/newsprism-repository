@@ -1387,8 +1387,7 @@ def render_tab_mcp_fragment():
     with _btn_col1:
         _do_gemini = st.button("🧠 Gemini 타임라인 요약", use_container_width=True, key="mcp_timeline_btn")
     with _btn_col2:
-        if st.button("📊 차트 반영", use_container_width=True, key="mcp_chart_apply_btn"):
-            st.rerun(scope="fragment")
+        st.button("📊 차트 반영", use_container_width=True, key="mcp_chart_apply_btn")
     if _do_gemini:
         if _news_input.strip():
             st.session_state.mcp_news_raw = _news_input
