@@ -448,28 +448,23 @@ def fetch_alpha_vantage_news(sector_name, start_idx, sort="RELEVANCE", use_ticke
             for item in feed:
                 source_domain = item.get("source_domain", "External").lower()
                 
-                # 출처 검사 로직
-                is_premium = any(p in source_domain for p in ALPHA_PREMIUM_PUBLISHERS)
+                # 찌라시만 걸러내고 나머지는 전부 Gemini에 위임
                 is_tabloid = any(t in source_domain for t in ALPHA_TABLOID_PUBLISHERS)
-                
-                # 둘 다 해당하지 않는 잡다한 매체는 아예 버림
-                if not is_premium and not is_tabloid:
-                    continue
 
                 sentiment = item.get("overall_sentiment_label", "Neutral")
                 clean_title = f"[{sentiment}] {sanitize_text(item.get('title', ''))} [{item.get('source_domain', 'External')}]"
                 n_id = f"A{idx}"
-                
+
                 news_map[n_id] = {
-                    "url": item.get('url', ''), 
-                    "title": clean_title, 
+                    "url": item.get('url', ''),
+                    "title": clean_title,
                     "snippet": sanitize_text(item.get('summary', ''))
                 }
-                
-                # 투 트랙 라우팅
+
+                # 투 트랙 라우팅 (찌라시 vs 전체 통과)
                 if is_tabloid:
                     tabloid_list.append({"id": n_id, "title": clean_title})
-                else: # is_premium
+                else:
                     context_list.append(f"[ID:{n_id}] {clean_title}")
                 
                 idx += 1
@@ -838,9 +833,9 @@ def render_tab_alpha_fragment(target_keywords, user_interest, default_keywords):
                 ui_status_text.markdown(f"🧠 [{sector_name}] AI 엘리트 필터링 및 **한국어 번역 중...**")
                 curated_list = apply_prism_lens_single(sector_name, raw_context, user_interest, search_query)
 
-                # 5개 미만이면 LATEST 정렬로 2차 호출 후 합산 재필터링
-                if len(curated_list) < 5:
-                    ui_status_text.markdown(f"🔄 [{sector_name}] 뉴스 부족 ({len(curated_list)}개) → 추가 수집 중...")
+                # 3개 미만이면 티커 기반 2차 호출 후 합산 재필터링
+                if len(curated_list) < 3:
+                    ui_status_text.markdown(f"🔄 [{sector_name}] 뉴스 부족 ({len(curated_list)}개/3개 미만) → 티커 기반 추가 수집 중...")
                     raw_context2, local_map2, local_tabloid2, alpha_idx, api_limit_hit2 = fetch_alpha_vantage_news(sector_name, alpha_idx, sort="RELEVANCE", use_tickers=True)
                     if api_limit_hit2:
                         timer_placeholder.empty()
@@ -1929,7 +1924,6 @@ def main():
         st.session_state.alpha_data = a_data
     if 'tabloid_results' not in st.session_state.alpha_data:
         st.session_state.alpha_data['tabloid_results'] = []
-        
     if 'yt_data' not in st.session_state: st.session_state.yt_data = y_data
 
     if 'selected_news_id' not in st.session_state: st.session_state.selected_news_id = None
