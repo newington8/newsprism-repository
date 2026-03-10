@@ -1210,8 +1210,8 @@ def render_tab_mcp_fragment():
             _raw = st.session_state.mcp_gainers or {}
             _all_tickers = list({
                 item['ticker']
-                for _lst in ['top_gainers', 'top_losers', 'most_actively_traded']
-                for item in _raw.get(_lst, [])[:10]
+                for _lst in ['gainers', 'losers', 'by_amount', 'by_volume']
+                for item in _raw.get(_lst, [])
             })
             _unknown = [t for t in _all_tickers if t not in st.session_state.mcp_ticker_names]
             if _unknown:
@@ -1359,8 +1359,8 @@ def render_tab_mcp_fragment():
 
         def _hl_item(item, sec, metric="pct"):
             tk    = item["ticker"]
-            nm    = _names.get(tk, tk)
-            label = nm if nm != tk else tk
+            nm    = _names.get(tk, "")
+            name  = nm if nm and nm != tk else tk   # 종목명 없으면 티커로 대체
             pct   = item["pct"]
             clr   = "#ef5350" if pct >= 0 else "#26a69a"
             sign  = "+" if pct >= 0 else ""
@@ -1371,33 +1371,14 @@ def render_tab_mcp_fragment():
             sub   = amt_s if metric == "amount" else vol_s
             sub_label = "거래대금" if metric == "amount" else "거래량"
 
-            c_info, c_btn = st.columns([5, 2])
-            with c_info:
-                st.markdown(
-                    f"**{label}** `{tk}`  \n"
-                    f"${item['price']:,.2f} &nbsp; "
-                    f"<span style='color:{clr}'>**{sign}{pct:.2f}%**</span>  \n"
-                    f"<small>{sub_label}: {sub}</small>",
-                    unsafe_allow_html=True
-                )
-            with c_btn:
-                if st.button("📋 개요", key=f"hl_{sec}_{tk}", use_container_width=True):
-                    if tk not in st.session_state.mcp_brief:
-                        with st.spinner(f"{tk} 기업 개요 생성 중..."):
-                            _p = f"""미국 상장 기업 {tk} ({label})에 대해 한국어로 간결하게 브리핑해줘.
-아래 항목을 포함해서 5~7문장으로 작성해:
-- 주요 사업 및 핵심 제품/서비스
-- 시장 포지션 및 주요 경쟁사
-- 최근 이슈 또는 성장 동력
-- 투자 관점에서의 특징 (성장주/가치주/배당주 등)"""
-                            try:
-                                _r = client.models.generate_content(model="gemini-2.0-flash", contents=_p)
-                                st.session_state.mcp_brief[tk] = _r.text
-                            except Exception as _e:
-                                st.session_state.mcp_brief[tk] = f"생성 실패: {_e}"
-            if tk in st.session_state.mcp_brief:
-                with st.expander(f"📄 {label} 기업 개요", expanded=True):
-                    st.write(st.session_state.mcp_brief[tk])
+            st.markdown(
+                f"**{name}** &nbsp; `{tk}`  \n"
+                f"${item['price']:,.2f} &nbsp; "
+                f"<span style='color:{clr}'>**{sign}{pct:.2f}%**</span>  \n"
+                f"<small>{sub_label}: {sub}</small>",
+                unsafe_allow_html=True
+            )
+            st.write("")
 
         # 상단: 상승 | 하락
         col_g, col_l = st.columns(2)
