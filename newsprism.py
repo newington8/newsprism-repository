@@ -1323,23 +1323,12 @@ def render_tab_mcp_fragment():
                 if not (_x_min <= _evt_naive <= _x_max):
                     continue
                 _x_str = _evt_naive.strftime('%Y-%m-%d %H:%M:%S')
-                _label = (_evt_desc[:16] + '…') if len(_evt_desc) > 16 else _evt_desc
                 fig.add_shape(
                     type='line',
                     x0=_x_str, x1=_x_str,
                     y0=0, y1=1,
                     yref='paper',
                     line=dict(color='#FFD600', width=1.5, dash='dash'),
-                )
-                fig.add_annotation(
-                    x=_x_str, y=1,
-                    yref='paper',
-                    text=_label,
-                    showarrow=False,
-                    font=dict(size=9, color='#FFD600'),
-                    xanchor='left',
-                    textangle=-90,
-                    bgcolor='rgba(0,0,0,0.4)',
                 )
             fig.update_layout(
                 title=dict(text=title, font=dict(size=14)),
@@ -1373,6 +1362,22 @@ def render_tab_mcp_fragment():
                 st.plotly_chart(_fig_nq, use_container_width=True)
             else:
                 st.caption("NQ Futures 데이터 없음 (장 마감 또는 로딩 중)")
+
+    # 차트에 반영된 이벤트 리스트
+    if st.session_state.mcp_events:
+        _et_list = pytz.timezone('America/New_York')
+        _sp_data = st.session_state.get('mcp_chart_sp')
+        if _sp_data is not None and not _sp_data.empty:
+            _cidx = _sp_data.index.tz_convert(_et_list) if _sp_data.index.tzinfo else _sp_data.index.tz_localize('UTC').tz_convert(_et_list)
+            _rng_min = _cidx.min().tz_localize(None).to_pydatetime()
+            _rng_max = _cidx.max().tz_localize(None).to_pydatetime()
+            _visible = [(dt, desc) for dt, desc in st.session_state.mcp_events
+                        if _rng_min <= dt.astimezone(_et_list).replace(tzinfo=None) <= _rng_max]
+            if _visible:
+                _evt_lines = '&nbsp;&nbsp;|&nbsp;&nbsp;'.join(
+                    f"<b>{dt.astimezone(_et_list).strftime('%H:%M')}</b> {desc}" for dt, desc in _visible
+                )
+                st.markdown(f"<div style='font-size:12px;color:#ccc;padding:4px 0'>{_evt_lines}</div>", unsafe_allow_html=True)
 
     # ── 섹션 0-B: 시황 뉴스 타임라인 분석 ────────────────────
     st.markdown("#### 📋 시황 뉴스 타임라인 분석")
