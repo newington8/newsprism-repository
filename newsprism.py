@@ -1101,8 +1101,52 @@ def render_tab_mcp_fragment():
         (_time.time() - st.session_state.mcp_last_loaded) > CACHE_TTL
     )
     if needs_load:
-        with st.spinner("📡 Alpha Vantage 데이터 로딩 중... (잠시만 기다려 주세요)"):
-            st.session_state.mcp_gainers      = av_get({"function": "TOP_GAINERS_LOSERS"})
+        with st.spinner("📡 마켓 데이터 로딩 중... (잠시만 기다려 주세요)"):
+            # ── S&P 500 전체 벌크 Quote → Gainers/Losers/Active 직접 계산 ──
+            def _fetch_sp500_movers():
+                _sp500 = list(get_sp500_tickers())
+                if not _sp500:
+                    return {}
+                _all_q = []
+                for _i in range(0, len(_sp500), 100):
+                    _syms = ",".join(_sp500[_i:_i + 100])
+                    try:
+                        _r = requests.get(
+                            "https://query1.finance.yahoo.com/v7/finance/quote",
+                            params={"symbols": _syms},
+                            headers={"User-Agent": "Mozilla/5.0"},
+                            timeout=10
+                        )
+                        _all_q.extend(_r.json().get("quoteResponse", {}).get("result", []))
+                    except Exception as _e:
+                        print(f"[Error] Yahoo bulk quote 실패: {_e}")
+                _valid = []
+                for _q in _all_q:
+                    try:
+                        _p   = float(_q.get("regularMarketPrice",        0) or 0)
+                        _pct = float(_q.get("regularMarketChangePercent", 0) or 0)
+                        _chg = float(_q.get("regularMarketChange",        0) or 0)
+                        _vol = int  (_q.get("regularMarketVolume",        0) or 0)
+                        _tk  = _q.get("symbol", "")
+                        _nm  = _q.get("shortName") or _q.get("longName") or _tk
+                        if _p > 0 and _tk:
+                            st.session_state.mcp_ticker_names[_tk] = _nm
+                            _valid.append({
+                                "ticker":            _tk,
+                                "price":             f"{_p:.2f}",
+                                "volume":            str(_vol),
+                                "change_percentage": f"{_pct:+.2f}%",
+                                "change_amount":     f"{_chg:+.2f}",
+                            })
+                    except Exception:
+                        pass
+                _g = sorted(_valid, key=lambda x: float(x["change_percentage"].rstrip('%')), reverse=True)[:15]
+                _l = sorted(_valid, key=lambda x: float(x["change_percentage"].rstrip('%')))[:15]
+                _a = sorted(_valid, key=lambda x: int(x["volume"]), reverse=True)[:15]
+                return {"top_gainers": _g, "top_losers": _l, "most_actively_traded": _a}
+
+            st.session_state.mcp_gainers = _fetch_sp500_movers()
+
             def _fred_csv(series_id):
                 """FRED 공개 CSV 데이터 (API 키 불필요)"""
                 try:
@@ -1311,7 +1355,6 @@ def render_tab_mcp_fragment():
     elif "error" in data:
         st.error(data["error"])
     else:
-        _sp500_set = get_sp500_tickers()
         _names  = st.session_state.get('mcp_ticker_names', {})
 
         def _fmt_vol(v):
@@ -1329,10 +1372,6 @@ def render_tab_mcp_fragment():
                     price_val = float(item.get('price', 0))
                     vol_val   = int(item.get('volume', 0))
                 except Exception:
-                    continue
-                if _sp500_set and ticker not in _sp500_set:
-                    continue
-                if price_val < 2.0 or vol_val < 50000:
                     continue
                 name  = _names.get(ticker, ticker)
                 pct   = item.get("change_percentage", "")
