@@ -1428,8 +1428,23 @@ def render_tab_mcp_fragment():
         if _news_input.strip():
             st.session_state.mcp_news_raw = _news_input
             with st.spinner("Gemini가 타임라인을 분석 중입니다..."):
+                _now_et  = datetime.now(pytz.timezone('America/New_York'))
+                _now_utc = datetime.now(pytz.utc)
+                _now_kst = datetime.now(pytz.timezone('Asia/Seoul'))
                 _tl_prompt = f"""당신은 미국 금융시장 전문 애널리스트입니다.
 아래는 미국 증시 시황과 관련된 뉴스 텍스트입니다. 이 내용을 분석하여 타임라인 형식으로 정리하세요.
+
+[★ 현재 기준 시각 (요약 실행 시점) ★]
+- ET (미국 동부): {_now_et.strftime('%Y-%m-%d %H:%M')}
+- UTC: {_now_utc.strftime('%Y-%m-%d %H:%M')}
+- KST (한국): {_now_kst.strftime('%Y-%m-%d %H:%M')}
+
+[★ 상대 시간 변환 규칙 ★]
+- "Today at HH:MM GMT+9" → KST 기준으로 계산 후 ET로 변환 (KST = ET + 14시간)
+- "X hours ago" → 현재 ET 시각에서 X시간 빼서 계산
+- "X minutes ago" → 현재 ET 시각에서 X분 빼서 계산
+- 날짜 없이 시각만 있는 경우 → 오늘 날짜로 간주
+- 위 계산으로 ET 시각을 반드시 산출할 것
 
 [★ 출력 형식 — 반드시 준수 ★]
 [HH:MM] 이벤트 제목 (한 줄, 핵심만)
@@ -1438,7 +1453,7 @@ def render_tab_mcp_fragment():
 - 시장 반응: S&P500·나스닥 즉각 반응 (파악 가능한 경우에만 작성)
 
 [작성 원칙]
-1. 반드시 [HH:MM] 형식 타임스탬프로 시작 — 명시된 시간 우선, 없으면 문맥 추론
+1. 반드시 [HH:MM] 형식 ET 타임스탬프로 시작 — 명시된 시간 우선, 상대시간은 위 규칙으로 변환
 2. %, 달러($), 베이시스포인트(bp), 고용자수(만명) 등 모든 수치 반드시 포함
 3. 우선순위: 연준·FOMC 발언 > CPI·NFP·PCE 등 경제지표 > 기업 실적·이슈 > 지정학
 4. 시간 오름차순 정렬 (가장 오래된 이벤트 → 최신 순)
