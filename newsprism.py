@@ -1183,15 +1183,18 @@ def render_tab_mcp_fragment():
             _wl_rows = []
             for _sym, _tk, _nm in _WATCHLIST:
                 try:
-                    _th = yf.Ticker(_tk).history(period="1mo")
+                    _th    = yf.Ticker(_tk).history(period="1mo")
+                    _th_1d = yf.Ticker(_tk).history(period="1d", interval="5m")
                     if _th.empty:
                         continue
-                    _closes = _th['Close'].dropna().tolist()
+                    _closes    = _th['Close'].dropna().tolist()
+                    _closes_1d = _th_1d['Close'].dropna().tolist() if not _th_1d.empty else []
                     _last   = _closes[-1]
                     _prev   = _closes[-2] if len(_closes) >= 2 else _last
                     _chg    = _last - _prev
                     _pct    = _chg / _prev * 100 if _prev else 0
-                    _wl_rows.append({"symbol": _sym, "name": _nm, "closes": _closes,
+                    _wl_rows.append({"symbol": _sym, "name": _nm,
+                                     "closes": _closes, "closes_1d": _closes_1d,
                                      "last": _last, "change": _chg, "pct": _pct})
                 except Exception:
                     pass
@@ -1232,7 +1235,8 @@ def render_tab_mcp_fragment():
             _up   = _r["pct"] >= 0
             _clr  = "#ef5350" if _up else "#26a69a"
             _sign = "+" if _up else ""
-            _spark = _make_sparkline(_r["closes"])
+            _spark_1mo = _make_sparkline(_r["closes"])
+            _spark_1d  = _make_sparkline(_r.get("closes_1d", []), width=70)
             _last_str = f"{_r['last']:,.2f}"
             _chg_str  = f"{_sign}{_r['change']:,.2f}"
             _pct_str  = f"{_sign}{_r['pct']:.2f}%"
@@ -1240,7 +1244,8 @@ def render_tab_mcp_fragment():
             <tr>
                 <td class="wl-sym">{_r['symbol']}</td>
                 <td class="wl-name">{_r['name']}</td>
-                <td class="wl-spark">{_spark}</td>
+                <td class="wl-spark">{_spark_1mo}</td>
+                <td class="wl-spark">{_spark_1d if _spark_1d else '<span style="color:#555;font-size:11px">장 마감</span>'}</td>
                 <td class="wl-num">{_last_str}</td>
                 <td class="wl-num" style="color:{_clr}">{_chg_str}</td>
                 <td class="wl-num" style="color:{_clr}"><b>{_pct_str}</b></td>
@@ -1265,7 +1270,8 @@ def render_tab_mcp_fragment():
                 <tr>
                     <th>Symbol</th>
                     <th>Name</th>
-                    <th>Sparkline</th>
+                    <th>1달 추이</th>
+                    <th>1일 추이</th>
                     <th class="wl-r">Last</th>
                     <th class="wl-r">Change</th>
                     <th class="wl-r">% Change ↕</th>
