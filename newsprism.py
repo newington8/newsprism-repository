@@ -1322,12 +1322,24 @@ def render_tab_mcp_fragment():
                 _evt_naive = _evt_et.replace(tzinfo=None)
                 if not (_x_min <= _evt_naive <= _x_max):
                     continue
-                fig.add_vline(
-                    x=_evt_naive.strftime('%Y-%m-%d %H:%M:%S'),
-                    line=dict(color='#FFD600', width=1.2, dash='dash'),
-                    annotation_text=_evt_desc[:18] + '…' if len(_evt_desc) > 18 else _evt_desc,
-                    annotation_font_size=10,
-                    annotation_font_color='#FFD600',
+                _x_str = _evt_naive.strftime('%Y-%m-%d %H:%M:%S')
+                _label = (_evt_desc[:16] + '…') if len(_evt_desc) > 16 else _evt_desc
+                fig.add_shape(
+                    type='line',
+                    x0=_x_str, x1=_x_str,
+                    y0=0, y1=1,
+                    yref='paper',
+                    line=dict(color='#FFD600', width=1.5, dash='dash'),
+                )
+                fig.add_annotation(
+                    x=_x_str, y=1,
+                    yref='paper',
+                    text=_label,
+                    showarrow=False,
+                    font=dict(size=9, color='#FFD600'),
+                    xanchor='left',
+                    textangle=-90,
+                    bgcolor='rgba(0,0,0,0.4)',
                 )
             fig.update_layout(
                 title=dict(text=title, font=dict(size=14)),
@@ -1436,6 +1448,20 @@ def render_tab_mcp_fragment():
             st.markdown(st.session_state.mcp_timeline)
         if st.session_state.mcp_events:
             st.caption(f"✅ {len(st.session_state.mcp_events)}개 이벤트 파싱 완료 → 위 차트에 반영됨")
+            # 디버그: 파싱된 이벤트 시간 목록 표시
+            _sp_dbg = st.session_state.get('mcp_chart_sp')
+            if _sp_dbg is not None and not _sp_dbg.empty:
+                _et_dbg = pytz.timezone('America/New_York')
+                _dbg_idx = _sp_dbg.index.tz_convert(_et_dbg) if _sp_dbg.index.tzinfo else _sp_dbg.index.tz_localize('UTC').tz_convert(_et_dbg)
+                _dbg_min = _dbg_idx.min().tz_localize(None).to_pydatetime()
+                _dbg_max = _dbg_idx.max().tz_localize(None).to_pydatetime()
+                _dbg_lines = [f"차트 범위: {_dbg_min.strftime('%H:%M')} ~ {_dbg_max.strftime('%H:%M')} ET"]
+                for _edt, _edesc in st.session_state.mcp_events:
+                    _eet = _edt.astimezone(_et_dbg) if _edt.tzinfo else _et_dbg.localize(_edt)
+                    _en = _eet.replace(tzinfo=None)
+                    _in = '✅ IN' if _dbg_min <= _en <= _dbg_max else '❌ OUT'
+                    _dbg_lines.append(f"{_in} {_en.strftime('%m-%d %H:%M')} {_edesc[:20]}")
+                st.caption(' | '.join(_dbg_lines))
     st.write("---")
 
     # ── 섹션 0: 관심종목 워치리스트 ───────────────────────────
