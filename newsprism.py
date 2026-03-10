@@ -1307,15 +1307,18 @@ def render_tab_mcp_fragment():
         _mn = _idx_tz.tz_localize(None).min().to_pydatetime()
         _mx = _idx_tz.tz_localize(None).max().to_pydatetime()
         _result = []
-        for _gi, (_dt, _desc) in enumerate(st.session_state.mcp_events):
-            _eet = _dt.astimezone(_et) if _dt.tzinfo else _et.localize(_dt)
-            _en = _eet.replace(tzinfo=None)
+        for _gi, _evt in enumerate(st.session_state.mcp_events):
+            _dt   = _evt[0]
+            _desc = _evt[1]
+            _det  = _evt[2] if len(_evt) > 2 else ''
+            _eet  = _dt.astimezone(_et) if _dt.tzinfo else _et.localize(_dt)
+            _en   = _eet.replace(tzinfo=None)
             if _mn <= _en <= _mx:
-                _result.append((_gi, _en, _desc))
+                _result.append((_gi, _en, _desc, _det))
         return _result
 
     def _build_chart(hist, title, color, events_in_range):
-        """events_in_range: [(global_idx, naive_dt, desc), ...]"""
+        """events_in_range: [(global_idx, naive_dt, title, detail), ...]"""
         if hist is None or hist.empty:
             return None
         try:
@@ -1335,11 +1338,16 @@ def render_tab_mcp_fragment():
                 _y_bot = min(_cls)
                 _marker_y = _y_top + (_y_top - _y_bot) * 0.03
                 _mxs, _mdescs = [], []
-                for _gi, _en, _desc in events_in_range:
-                    _lbl = str(_gi + 1)  # 전역 번호 (1부터 시작)
+                for _evt_item in events_in_range:
+                    _gi, _en, _desc = _evt_item[0], _evt_item[1], _evt_item[2]
+                    _det = _evt_item[3] if len(_evt_item) > 3 else ''
+                    _lbl = str(_gi + 1)
                     _xs = _en.strftime('%Y-%m-%d %H:%M:%S')
                     _mxs.append(_xs)
-                    _mdescs.append(f"<b>{_lbl}</b>  {_en.strftime('%H:%M')} ET<br>{_desc}")
+                    _hover = f"<b>{_lbl}</b>  {_en.strftime('%H:%M')} ET<br>{_desc}"
+                    if _det:
+                        _hover += f"<br><i>{_det[:120]}{'…' if len(_det) > 120 else ''}</i>"
+                    _mdescs.append(_hover)
                     fig.add_shape(
                         type='line', x0=_xs, x1=_xs, y0=0, y1=1, yref='paper',
                         line=dict(color='#E53935', width=1, dash='dot'),
@@ -1399,16 +1407,26 @@ def render_tab_mcp_fragment():
                 st.caption("NQ Futures 데이터 없음 (장 마감 또는 로딩 중)")
 
     # 차트 아래 통합 범례 (SP+NQ 합집합, 전역 번호 기준 정렬)
-    _all_shown = {_gi: (_en, _desc) for _gi, _en, _desc in (_sp_events + _nq_events)}
+    _all_shown = {}
+    for _item in (_sp_events + _nq_events):
+        _gi = _item[0]
+        if _gi not in _all_shown:
+            _all_shown[_gi] = _item
     if _all_shown:
-        _legend_rows = ''.join(
-            f"<span style='display:inline-block;background:#E53935;color:#fff;font-weight:bold;"
-            f"font-size:11px;padding:1px 6px;border-radius:3px;margin-right:6px'>{_gi + 1}</span>"
-            f"<b style='color:#000;font-size:13px'>{_en.strftime('%H:%M')} &nbsp;{_desc}</b>"
-            f"<br>"
-            for _gi, (_en, _desc) in sorted(_all_shown.items())
-        )
-        st.markdown(f"<div style='line-height:2;padding:4px 0'>{_legend_rows}</div>", unsafe_allow_html=True)
+        _legend_rows = ''
+        for _gi, _item in sorted(_all_shown.items()):
+            _en   = _item[1]
+            _desc = _item[2]
+            _det  = _item[3] if len(_item) > 3 else ''
+            _legend_rows += (
+                f"<div style='margin-bottom:6px'>"
+                f"<span style='display:inline-block;background:#E53935;color:#fff;font-weight:bold;"
+                f"font-size:11px;padding:1px 6px;border-radius:3px;margin-right:6px'>{_gi + 1}</span>"
+                f"<b style='color:#000;font-size:13px'>{_en.strftime('%H:%M')} &nbsp;{_desc}</b>"
+                + (f"<div style='margin-left:36px;color:#444;font-size:12px;margin-top:1px'>{_det}</div>" if _det else "")
+                + "</div>"
+            )
+        st.markdown(f"<div style='padding:4px 0'>{_legend_rows}</div>", unsafe_allow_html=True)
 
     # ── 섹션 0-B: 시황 뉴스 타임라인 분석 ────────────────────
     st.markdown("#### 📋 시황 뉴스 타임라인 분석")
@@ -1477,20 +1495,40 @@ def render_tab_mcp_fragment():
                         _cidx = _sp_data.index.tz_convert(_et_tz) if _sp_data.index.tzinfo else _sp_data.index.tz_localize('UTC').tz_convert(_et_tz)
                         _chart_min = _cidx.min()
                         _chart_max = _cidx.max()
-                    _evts    = []
-                    for _m in re.finditer(r'\[(?:(\d{4})-(\d{2})-(\d{2})\s+)?(\d{1,2}):(\d{2})\]\s*(.+)', _tl_text):
+                    # 이벤트 블록 분리: [HH:MM] 타임스탬프 기준으로 split
+                    _evt_pattern = r'\[(?:(?:\d{4})-(?:\d{2})-(?:\d{2})\s+)?\d{1,2}:\d{2}\]'
+                    _splits = re.split(f'({_evt_pattern})', _tl_text)
+                    # _splits: ['앞텍스트', '[09:41]', '제목\n- 핵심:...', '[10:30]', '제목\n...', ...]
+                    _evts = []
+                    _i = 1
+                    while _i < len(_splits) - 1:
+                        _ts_str  = _splits[_i]        # '[09:41]' 또는 '[2026-03-11 09:41]'
+                        _content = _splits[_i + 1] if _i + 1 < len(_splits) else ''
+                        _i += 2
                         try:
-                            _yr, _mo, _dy = _m.group(1), _m.group(2), _m.group(3)
-                            _h, _mi = int(_m.group(4)), int(_m.group(5))
-                            _desc   = _m.group(6).strip()
+                            _tm = re.match(r'\[(?:(\d{4})-(\d{2})-(\d{2})\s+)?(\d{1,2}):(\d{2})\]', _ts_str)
+                            if not _tm:
+                                continue
+                            _yr, _mo, _dy = _tm.group(1), _tm.group(2), _tm.group(3)
+                            _h, _mi = int(_tm.group(4)), int(_tm.group(5))
+                            # 제목: content 첫 줄
+                            _lines = _content.strip().splitlines()
+                            _title = _lines[0].strip() if _lines else ''
+                            # 상세: 이후 줄에서 핵심/발언/시장반응 추출
+                            _detail_lines = []
+                            for _ln in _lines[1:]:
+                                _ln = _ln.strip()
+                                if _ln.startswith('- ') or _ln.startswith('* '):
+                                    _detail_lines.append(_ln[2:].strip())
+                                elif _ln:
+                                    _detail_lines.append(_ln)
+                            _detail = ' / '.join(_detail_lines) if _detail_lines else ''
                             if _yr:
-                                # 날짜가 명시된 경우 그대로 사용
                                 _dt_evt = _et_tz.localize(datetime(int(_yr), int(_mo), int(_dy), _h, _mi, 0))
                             else:
-                                # 날짜 없는 [HH:MM] → 차트 범위 내 날짜로 추론
                                 _base = _chart_min.date() if _chart_min else _today.date()
                                 _dt_evt = _et_tz.localize(datetime(_base.year, _base.month, _base.day, _h, _mi, 0))
-                            _evts.append((_dt_evt, _desc))
+                            _evts.append((_dt_evt, _title, _detail))
                         except Exception:
                             pass
                     st.session_state.mcp_events = _evts
