@@ -1102,42 +1102,39 @@ def render_tab_mcp_fragment():
     )
     if needs_load:
         with st.spinner("📡 마켓 데이터 로딩 중... (잠시만 기다려 주세요)"):
-            # ── S&P 500 전체 벌크 Quote → Gainers/Losers/Active 직접 계산 ──
+            # ── S&P 500 전체 yfinance 배치 다운로드 → Gainers/Losers/Active 직접 계산 ──
             def _fetch_sp500_movers():
                 _sp500 = list(get_sp500_tickers())
                 if not _sp500:
                     return {}
-                _all_q = []
-                for _i in range(0, len(_sp500), 100):
-                    _syms = ",".join(_sp500[_i:_i + 100])
-                    try:
-                        _r = requests.get(
-                            "https://query1.finance.yahoo.com/v7/finance/quote",
-                            params={"symbols": _syms},
-                            headers={"User-Agent": "Mozilla/5.0"},
-                            timeout=10
-                        )
-                        _all_q.extend(_r.json().get("quoteResponse", {}).get("result", []))
-                    except Exception as _e:
-                        print(f"[Error] Yahoo bulk quote 실패: {_e}")
+                try:
+                    _raw = yf.download(
+                        _sp500, period="5d", interval="1d",
+                        group_by="ticker", threads=True,
+                        progress=False, auto_adjust=True
+                    )
+                except Exception as _e:
+                    print(f"[Error] yfinance download 실패: {_e}")
+                    return {}
                 _valid = []
-                for _q in _all_q:
+                for _tk in _sp500:
                     try:
-                        _p   = float(_q.get("regularMarketPrice",        0) or 0)
-                        _pct = float(_q.get("regularMarketChangePercent", 0) or 0)
-                        _chg = float(_q.get("regularMarketChange",        0) or 0)
-                        _vol = int  (_q.get("regularMarketVolume",        0) or 0)
-                        _tk  = _q.get("symbol", "")
-                        _nm  = _q.get("shortName") or _q.get("longName") or _tk
-                        if _p > 0 and _tk:
-                            st.session_state.mcp_ticker_names[_tk] = _nm
-                            _valid.append({
-                                "ticker":            _tk,
-                                "price":             f"{_p:.2f}",
-                                "volume":            str(_vol),
-                                "change_percentage": f"{_pct:+.2f}%",
-                                "change_amount":     f"{_chg:+.2f}",
-                            })
+                        _closes = _raw[_tk]["Close"].dropna()
+                        _vols   = _raw[_tk]["Volume"].dropna()
+                        if len(_closes) < 2:
+                            continue
+                        _last = float(_closes.iloc[-1])
+                        _prev = float(_closes.iloc[-2])
+                        _vol  = int(_vols.iloc[-1]) if len(_vols) > 0 else 0
+                        _pct  = (_last - _prev) / _prev * 100 if _prev else 0
+                        _chg  = _last - _prev
+                        _valid.append({
+                            "ticker":            _tk,
+                            "price":             f"{_last:.2f}",
+                            "volume":            str(_vol),
+                            "change_percentage": f"{_pct:+.2f}%",
+                            "change_amount":     f"{_chg:+.2f}",
+                        })
                     except Exception:
                         pass
                 _g = sorted(_valid, key=lambda x: float(x["change_percentage"].rstrip('%')), reverse=True)[:15]
