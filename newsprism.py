@@ -1344,10 +1344,7 @@ def render_tab_mcp_fragment():
                     _lbl = str(_gi + 1)
                     _xs = _en.strftime('%Y-%m-%d %H:%M:%S')
                     _mxs.append(_xs)
-                    _hover = f"<b>{_lbl}</b>  {_en.strftime('%H:%M')} ET<br>{_desc}"
-                    if _det:
-                        _hover += f"<br><i>{_det[:120]}{'…' if len(_det) > 120 else ''}</i>"
-                    _mdescs.append(_hover)
+                    _mdescs.append(f"<b>{_lbl}</b>  {_en.strftime('%H:%M')} ET<br>{_desc}")
                     fig.add_shape(
                         type='line', x0=_xs, x1=_xs, y0=0, y1=1, yref='paper',
                         line=dict(color='#E53935', width=1, dash='dot'),
