@@ -2289,7 +2289,7 @@ def render_tab_mcp_fragment():
 # 📌 메인 앱 렌더링
 # ==========================================
 def main():
-    st.set_page_config(page_title="News Prism V10.12", page_icon="💎", layout="wide")
+    st.set_page_config(page_title="News Prism V10.39", page_icon="💎", layout="wide")
 
     st.markdown("""
         <style>
