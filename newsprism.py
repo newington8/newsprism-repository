@@ -1298,44 +1298,76 @@ def render_tab_mcp_fragment():
     except ImportError:
         _plotly_ok = False
 
-    def _build_chart(hist, title, color):
+    _LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+
+    def _get_events_in_range(hist):
+        """차트 시간 범위 안의 이벤트만 추출 → [(naive_dt, desc), ...]"""
+        if hist is None or hist.empty or not st.session_state.mcp_events:
+            return []
+        _et = pytz.timezone('America/New_York')
+        _idx_tz = hist.index.tz_convert(_et) if hist.index.tzinfo else hist.index.tz_localize('UTC').tz_convert(_et)
+        _mn = _idx_tz.tz_localize(None).min().to_pydatetime()
+        _mx = _idx_tz.tz_localize(None).max().to_pydatetime()
+        _result = []
+        for _dt, _desc in st.session_state.mcp_events:
+            _eet = _dt.astimezone(_et) if _dt.tzinfo else _et.localize(_dt)
+            _en = _eet.replace(tzinfo=None)
+            if _mn <= _en <= _mx:
+                _result.append((_en, _desc))
+        return _result
+
+    def _build_chart(hist, title, color, events_in_range):
         if hist is None or hist.empty:
             return None
         try:
             _et  = pytz.timezone('America/New_York')
-            # ET로 변환 후 timezone strip → naive ET datetime으로 통일 (Plotly UTC 혼용 방지)
             _idx_tz = hist.index.tz_convert(_et) if hist.index.tzinfo else hist.index.tz_localize('UTC').tz_convert(_et)
-            _idx = _idx_tz.tz_localize(None)  # naive ET
+            _idx = _idx_tz.tz_localize(None)
             _cls = hist['Close'].tolist()
             fig  = go.Figure()
             fig.add_trace(go.Scatter(
                 x=_idx, y=_cls, mode='lines',
                 line=dict(color=color, width=1.5),
-                hovertemplate='%{x|%H:%M} ET<br><b>%{y:,.2f}</b><extra></extra>'
+                hovertemplate='%{x|%H:%M} ET<br><b>%{y:,.2f}</b><extra></extra>',
+                showlegend=False,
             ))
-            # 이벤트 오버레이 (차트 시간 범위 내 이벤트만, naive ET로 비교)
-            _x_min = _idx.min().to_pydatetime()
-            _x_max = _idx.max().to_pydatetime()
-            for _evt_dt, _evt_desc in st.session_state.mcp_events:
-                # naive ET로 변환
-                _evt_et = _evt_dt.astimezone(_et) if _evt_dt.tzinfo else _et.localize(_evt_dt)
-                _evt_naive = _evt_et.replace(tzinfo=None)
-                if not (_x_min <= _evt_naive <= _x_max):
-                    continue
-                _x_str = _evt_naive.strftime('%Y-%m-%d %H:%M:%S')
-                fig.add_shape(
-                    type='line',
-                    x0=_x_str, x1=_x_str,
-                    y0=0, y1=1,
-                    yref='paper',
-                    line=dict(color='#FFD600', width=1.5, dash='dash'),
-                )
+            # 이벤트 마커 + 세로선
+            if events_in_range:
+                _y_top = max(_cls)
+                _y_bot = min(_cls)
+                _y_pad = (_y_top - _y_bot) * 0.03
+                _marker_y = _y_top + _y_pad
+                _mxs, _mlabels, _mdescs = [], [], []
+                for _i, (_en, _desc) in enumerate(events_in_range):
+                    _xs = _en.strftime('%Y-%m-%d %H:%M:%S')
+                    _lbl = _LETTERS[_i % 26]
+                    _mxs.append(_xs)
+                    _mlabels.append(_lbl)
+                    _mdescs.append(f"{_lbl}  {_en.strftime('%H:%M')} ET<br>{_desc}")
+                    fig.add_shape(
+                        type='line', x0=_xs, x1=_xs, y0=0, y1=1, yref='paper',
+                        line=dict(color='#FFD600', width=1, dash='dot'),
+                    )
+                fig.add_trace(go.Scatter(
+                    x=_mxs,
+                    y=[_marker_y] * len(_mxs),
+                    mode='markers+text',
+                    text=_mlabels,
+                    textposition='middle center',
+                    marker=dict(symbol='square', size=18, color='#FFD600',
+                                line=dict(color='#333', width=1)),
+                    textfont=dict(size=10, color='#222'),
+                    hovertemplate='%{customdata}<extra></extra>',
+                    customdata=_mdescs,
+                    showlegend=False,
+                ))
             fig.update_layout(
                 title=dict(text=title, font=dict(size=14)),
-                height=360,
+                height=380,
                 margin=dict(l=55, r=15, t=40, b=40),
                 xaxis=dict(tickformat='%H:%M', showgrid=True, gridcolor='#333', title='시간 (ET)'),
-                yaxis=dict(showgrid=True, gridcolor='#333', tickformat=',.0f', title='포인트'),
+                yaxis=dict(showgrid=True, gridcolor='#333', tickformat=',.0f', title='포인트',
+                           autorange=True),
                 hovermode='x unified',
                 template='plotly_dark',
                 showlegend=False,
@@ -1345,39 +1377,38 @@ def render_tab_mcp_fragment():
             print(f"[Error] 차트 생성 실패: {_e}")
             return None
 
+    # SP500 기준으로 이벤트 범위 계산 (범례 표시용)
+    _sp_events = _get_events_in_range(st.session_state.get('mcp_chart_sp'))
+    _nq_events = _get_events_in_range(st.session_state.get('mcp_chart_nq'))
+
     st.markdown("#### 📊 S&P 500 · NQ Futures — 24h 차트")
     _col_sp, _col_nq = st.columns(2)
     if not _plotly_ok:
         st.warning("plotly 라이브러리가 필요합니다. requirements.txt를 확인해주세요.")
     else:
         with _col_sp:
-            _fig_sp = _build_chart(st.session_state.mcp_chart_sp, "S&P 500  (^GSPC)", "#2196F3")
+            _fig_sp = _build_chart(st.session_state.mcp_chart_sp, "S&P 500  (^GSPC)", "#2196F3", _sp_events)
             if _fig_sp:
                 st.plotly_chart(_fig_sp, use_container_width=True)
             else:
                 st.caption("S&P 500 데이터 없음 (장 마감 또는 로딩 중)")
         with _col_nq:
-            _fig_nq = _build_chart(st.session_state.mcp_chart_nq, "NQ Futures  (NQ=F)", "#FF9800")
+            _fig_nq = _build_chart(st.session_state.mcp_chart_nq, "NQ Futures  (NQ=F)", "#FF9800", _nq_events)
             if _fig_nq:
                 st.plotly_chart(_fig_nq, use_container_width=True)
             else:
                 st.caption("NQ Futures 데이터 없음 (장 마감 또는 로딩 중)")
 
-    # 차트에 반영된 이벤트 리스트
-    if st.session_state.mcp_events:
-        _et_list = pytz.timezone('America/New_York')
-        _sp_data = st.session_state.get('mcp_chart_sp')
-        if _sp_data is not None and not _sp_data.empty:
-            _cidx = _sp_data.index.tz_convert(_et_list) if _sp_data.index.tzinfo else _sp_data.index.tz_localize('UTC').tz_convert(_et_list)
-            _rng_min = _cidx.min().tz_localize(None).to_pydatetime()
-            _rng_max = _cidx.max().tz_localize(None).to_pydatetime()
-            _visible = [(dt, desc) for dt, desc in st.session_state.mcp_events
-                        if _rng_min <= dt.astimezone(_et_list).replace(tzinfo=None) <= _rng_max]
-            if _visible:
-                _evt_lines = '&nbsp;&nbsp;|&nbsp;&nbsp;'.join(
-                    f"<b>{dt.astimezone(_et_list).strftime('%H:%M')}</b> {desc}" for dt, desc in _visible
-                )
-                st.markdown(f"<div style='font-size:12px;color:#ccc;padding:4px 0'>{_evt_lines}</div>", unsafe_allow_html=True)
+    # 차트 아래 이벤트 범례 (A - 09:45 Powell said...)
+    if _sp_events:
+        _legend_rows = ''.join(
+            f"<span style='display:inline-block;background:#FFD600;color:#222;font-weight:bold;"
+            f"font-size:11px;padding:1px 5px;border-radius:3px;margin-right:4px'>{_LETTERS[_i % 26]}</span>"
+            f"<span style='color:#ccc;font-size:12px'>{_en.strftime('%H:%M')} {_desc}</span>"
+            f"<br>"
+            for _i, (_en, _desc) in enumerate(_sp_events)
+        )
+        st.markdown(f"<div style='line-height:1.8;padding:4px 0'>{_legend_rows}</div>", unsafe_allow_html=True)
 
     # ── 섹션 0-B: 시황 뉴스 타임라인 분석 ────────────────────
     st.markdown("#### 📋 시황 뉴스 타임라인 분석")
@@ -1457,21 +1488,7 @@ def render_tab_mcp_fragment():
         with st.expander("📊 타임라인 요약 보기", expanded=True):
             st.markdown(st.session_state.mcp_timeline)
         if st.session_state.mcp_events:
-            st.caption(f"✅ {len(st.session_state.mcp_events)}개 이벤트 파싱 완료 → 위 차트에 반영됨")
-            # 디버그: 파싱된 이벤트 시간 목록 표시
-            _sp_dbg = st.session_state.get('mcp_chart_sp')
-            if _sp_dbg is not None and not _sp_dbg.empty:
-                _et_dbg = pytz.timezone('America/New_York')
-                _dbg_idx = _sp_dbg.index.tz_convert(_et_dbg) if _sp_dbg.index.tzinfo else _sp_dbg.index.tz_localize('UTC').tz_convert(_et_dbg)
-                _dbg_min = _dbg_idx.min().tz_localize(None).to_pydatetime()
-                _dbg_max = _dbg_idx.max().tz_localize(None).to_pydatetime()
-                _dbg_lines = [f"차트 범위: {_dbg_min.strftime('%H:%M')} ~ {_dbg_max.strftime('%H:%M')} ET"]
-                for _edt, _edesc in st.session_state.mcp_events:
-                    _eet = _edt.astimezone(_et_dbg) if _edt.tzinfo else _et_dbg.localize(_edt)
-                    _en = _eet.replace(tzinfo=None)
-                    _in = '✅ IN' if _dbg_min <= _en <= _dbg_max else '❌ OUT'
-                    _dbg_lines.append(f"{_in} {_en.strftime('%m-%d %H:%M')} {_edesc[:20]}")
-                st.caption(' | '.join(_dbg_lines))
+            st.caption(f"✅ {len(st.session_state.mcp_events)}개 이벤트 파싱 완료 → 📊 차트 반영 버튼을 눌러 적용하세요")
     st.write("---")
 
     # ── 섹션 0: 관심종목 워치리스트 ───────────────────────────
