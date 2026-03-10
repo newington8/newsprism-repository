@@ -2003,12 +2003,12 @@ def main():
                 f"""
                 <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 10px;">
                     <img src="data:image/png;base64,{data}" style="height: 200px; border-radius: 8px;">
-                    <h1 style="margin: 0; padding: 0; line-height: 1.2;"> 가나디: 신문배달 와써여~~ - V10.3</h1>
+                    <h1 style="margin: 0; padding: 0; line-height: 1.2;">가나디의 신문배달</h1>
                 </div>
                 """, unsafe_allow_html=True
             )
     else:
-        st.title("💎 가나디의 신문배달 - V10.3")
+        st.title("💎 가나디의 신문배달")
         st.info(f"💡 '{LOGO_PATH}' 파일을 찾을 수 없습니다. 이미지를 깃허브에 업로드해 주세요.")
 
     st.markdown("##### 🚀top10 섹션 헤드라인 + 📺유튜브 주요채널들")
