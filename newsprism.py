@@ -1337,26 +1337,33 @@ def render_tab_mcp_fragment():
                 _y_bot = min(_cls)
                 _y_pad = (_y_top - _y_bot) * 0.03
                 _marker_y = _y_top + _y_pad
-                _mxs, _mlabels, _mdescs = [], [], []
+                _mxs, _mdescs = [], []
                 for _i, (_en, _desc) in enumerate(events_in_range):
                     _xs = _en.strftime('%Y-%m-%d %H:%M:%S')
-                    _lbl = _LETTERS[_i % 26]
+                    _lbl = _LETTERS[_i]
                     _mxs.append(_xs)
-                    _mlabels.append(_lbl)
-                    _mdescs.append(f"{_lbl}  {_en.strftime('%H:%M')} ET<br>{_desc}")
+                    _mdescs.append(f"<b>{_lbl}</b>  {_en.strftime('%H:%M')} ET<br>{_desc}")
                     fig.add_shape(
                         type='line', x0=_xs, x1=_xs, y0=0, y1=1, yref='paper',
                         line=dict(color='#E53935', width=1, dash='dot'),
                     )
+                    # 숫자 라벨: add_annotation으로 깔끔하게 렌더링
+                    fig.add_annotation(
+                        x=_xs, y=1.0, yref='paper',
+                        text=f"<b>{_lbl}</b>",
+                        showarrow=False,
+                        font=dict(size=11, color='white'),
+                        bgcolor='#E53935',
+                        borderpad=3,
+                        xanchor='center',
+                        yanchor='bottom',
+                    )
+                # 투명 scatter → hover 전용
                 fig.add_trace(go.Scatter(
                     x=_mxs,
                     y=[_marker_y] * len(_mxs),
-                    mode='markers+text',
-                    text=_mlabels,
-                    textposition='middle center',
-                    marker=dict(symbol='square', size=20, color='#E53935',
-                                line=dict(color='#fff', width=1)),
-                    textfont=dict(size=11, color='#fff', family='Arial Black'),
+                    mode='markers',
+                    marker=dict(symbol='square', size=20, color='rgba(0,0,0,0)'),
                     hovertemplate='%{customdata}<extra></extra>',
                     customdata=_mdescs,
                     showlegend=False,
