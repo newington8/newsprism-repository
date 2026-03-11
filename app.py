@@ -1065,6 +1065,7 @@ def render_tab_mcp_fragment():
         ('mcp_watchlist', None),
         ('mcp_chart_sp', None), ('mcp_chart_nq', None),
         ('mcp_timeline', ''), ('mcp_events', []), ('mcp_news_raw', ''),
+        ('mcp_sector', None),
     ]:
         if _k not in st.session_state:
             st.session_state[_k] = _v
@@ -1236,6 +1237,9 @@ def render_tab_mcp_fragment():
             }
             st.session_state.mcp_commodities = {k: _yf_price(v) for k, v in _yf_map.items()}
             st.session_state.mcp_earnings_cal = av_get_text({"function": "EARNINGS_CALENDAR", "horizon": "3month"})
+
+            # ── 섹터 퍼포먼스 (Alpha Vantage SECTOR) ──
+            st.session_state.mcp_sector = av_get({"function": "SECTOR"})
 
             # ── 종목명 병렬 조회 (Yahoo Finance) ──
             _raw = st.session_state.mcp_gainers or {}
@@ -1555,6 +1559,94 @@ def render_tab_mcp_fragment():
             st.markdown(st.session_state.mcp_timeline)
         if st.session_state.mcp_events:
             st.caption(f"✅ {len(st.session_state.mcp_events)}개 이벤트 파싱 완료 → 📊 차트 반영 버튼을 눌러 적용하세요")
+    st.write("---")
+
+    # ── 섹션 0-C: 섹터맵 ──────────────────────────────────────
+    st.markdown("#### 🗺️ S&P 500 섹터 퍼포먼스")
+    _sector_data = st.session_state.get('mcp_sector')
+    _SECTOR_KR = {
+        "Information Technology":    "IT·기술",
+        "Health Care":               "헬스케어",
+        "Financials":                "금융",
+        "Consumer Discretionary":    "임의소비재",
+        "Communication Services":    "통신·미디어",
+        "Industrials":               "산업재",
+        "Consumer Staples":          "필수소비재",
+        "Energy":                    "에너지",
+        "Materials":                 "소재",
+        "Real Estate":               "부동산",
+        "Utilities":                 "유틸리티",
+    }
+    # 섹터별 S&P500 시총 비중 (2024 기준 근사치)
+    _SECTOR_WEIGHT = {
+        "Information Technology": 29, "Health Care": 13, "Financials": 13,
+        "Consumer Discretionary": 10, "Communication Services": 9, "Industrials": 8,
+        "Consumer Staples": 6, "Energy": 4, "Materials": 3,
+        "Real Estate": 2, "Utilities": 3,
+    }
+    if _sector_data and "Rank B: 1 Day Performance" in _sector_data:
+        try:
+            from plotly import graph_objects as _go_s
+        except Exception:
+            _go_s = None
+        _day_perf = _sector_data.get("Rank B: 1 Day Performance", {})
+        _labels, _parents, _values, _colors, _texts = [], [], [], [], []
+        _labels.append("S&P 500"); _parents.append(""); _values.append(0); _colors.append(0); _texts.append("")
+        for _sec, _kr in _SECTOR_KR.items():
+            _pct_str = _day_perf.get(_sec, "0%").replace("%", "").strip()
+            try:
+                _pct = float(_pct_str)
+            except Exception:
+                _pct = 0.0
+            _sign = "+" if _pct >= 0 else ""
+            _labels.append(_kr)
+            _parents.append("S&P 500")
+            _values.append(_SECTOR_WEIGHT.get(_sec, 5))
+            _colors.append(_pct)
+            _texts.append(f"{_kr}<br>{_sign}{_pct:.2f}%")
+        if _go_s:
+            _fig_sec = _go_s.Figure(_go_s.Treemap(
+                labels=_labels, parents=_parents, values=_values,
+                text=_texts, textinfo="text",
+                customdata=_colors,
+                marker=dict(
+                    colors=_colors,
+                    colorscale=[[0,"#C62828"],[0.5,"#37474F"],[1,"#1B5E20"]],
+                    cmid=0, cmin=-3, cmax=3,
+                    showscale=True,
+                    colorbar=dict(title="%", thickness=12, len=0.8),
+                ),
+                hovertemplate="<b>%{label}</b><br>1일 등락: %{customdata:.2f}%<extra></extra>",
+            ))
+            _fig_sec.update_layout(
+                height=320, margin=dict(l=0, r=0, t=0, b=0),
+                template="plotly_dark",
+            )
+            st.plotly_chart(_fig_sec, width="stretch")
+            # 섹터별 기간 수익률 테이블
+            _period_map = [
+                ("Rank B: 1 Day Performance",   "1일"),
+                ("Rank C: 5 Day Performance",   "5일"),
+                ("Rank D: 1 Month Performance", "1개월"),
+                ("Rank E: 3 Month Performance", "3개월"),
+                ("Rank F: Year-to-Date (YTD) Performance", "YTD"),
+            ]
+            with st.expander("📋 섹터별 기간 수익률 상세", expanded=False):
+                _tbl_cols = ["섹터"] + [_lbl for _, _lbl in _period_map]
+                _tbl_rows = []
+                for _sec, _kr in _SECTOR_KR.items():
+                    _row = [_kr]
+                    for _rank_key, _ in _period_map:
+                        _v = _sector_data.get(_rank_key, {}).get(_sec, "N/A")
+                        _row.append(_v)
+                    _tbl_rows.append(_row)
+                import pandas as _pd_sec
+                _df_sec = _pd_sec.DataFrame(_tbl_rows, columns=_tbl_cols)
+                st.dataframe(_df_sec, use_container_width=True, hide_index=True)
+        else:
+            st.caption("plotly 라이브러리가 필요합니다.")
+    else:
+        st.caption("⏳ 섹터 데이터 로딩 중...")
     st.write("---")
 
     # ── 섹션 0: 관심종목 워치리스트 ───────────────────────────
