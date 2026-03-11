@@ -1106,40 +1106,49 @@ def render_tab_mcp_fragment():
         with st.spinner("📡 마켓 데이터 로딩 중... (잠시만 기다려 주세요)"):
             # ── S&P 500 HIGHLIGHTS: yfinance 배치 → 4개 리스트 계산 ──
             def _fetch_sp500_highlights():
-                _sp500 = list(get_sp500_tickers())
-                if not _sp500:
+                _sp500_raw = list(get_sp500_tickers())
+                if not _sp500_raw:
                     return None
-                try:
-                    _raw = yf.download(
-                        _sp500, period="5d", interval="1d",
-                        group_by="ticker", threads=True,
-                        progress=False, auto_adjust=True
-                    )
-                except Exception as _e:
-                    print(f"[Error] yfinance download 실패: {_e}")
-                    return None
+                # 점(.) → 하이픈(-) 변환 (BRK.B→BRK-B, BF.B→BF-B)
+                _ticker_map = {tk.replace('.', '-'): tk for tk in _sp500_raw}
+                _sp500 = list(_ticker_map.keys())
+                # 100개씩 청크 분할 다운로드 (메모리 절약)
+                _CHUNK = 100
                 _valid = []
-                for _tk in _sp500:
+                for _i in range(0, len(_sp500), _CHUNK):
+                    _chunk = _sp500[_i:_i + _CHUNK]
                     try:
-                        _closes = _raw[_tk]["Close"].dropna()
-                        _vols   = _raw[_tk]["Volume"].dropna()
-                        if len(_closes) < 2:
-                            continue
-                        _last = float(_closes.iloc[-1])
-                        _prev = float(_closes.iloc[-2])
-                        _vol  = int(_vols.iloc[-1]) if len(_vols) > 0 else 0
-                        _pct  = (_last - _prev) / _prev * 100 if _prev else 0
-                        _amt  = _last * _vol
-                        _valid.append({
-                            "ticker": _tk,
-                            "price":  _last,
-                            "volume": _vol,
-                            "amount": _amt,
-                            "pct":    _pct,
-                            "chg":    _last - _prev,
-                        })
-                    except Exception:
-                        pass
+                        _raw = yf.download(
+                            _chunk, period="5d", interval="1d",
+                            group_by="ticker", threads=False,
+                            progress=False, auto_adjust=True
+                        )
+                    except Exception as _e:
+                        print(f"[Error] chunk {_i} download 실패: {_e}")
+                        continue
+                    for _tk in _chunk:
+                        try:
+                            _closes = _raw[_tk]["Close"].dropna()
+                            _vols   = _raw[_tk]["Volume"].dropna()
+                            if len(_closes) < 2:
+                                continue
+                            _last = float(_closes.iloc[-1])
+                            _prev = float(_closes.iloc[-2])
+                            _vol  = int(_vols.iloc[-1]) if len(_vols) > 0 else 0
+                            _pct  = (_last - _prev) / _prev * 100 if _prev else 0
+                            _amt  = _last * _vol
+                            _orig_tk = _ticker_map.get(_tk, _tk)
+                            _valid.append({
+                                "ticker": _orig_tk,
+                                "price":  _last,
+                                "volume": _vol,
+                                "amount": _amt,
+                                "pct":    _pct,
+                                "chg":    _last - _prev,
+                            })
+                        except Exception:
+                            pass
+                    del _raw  # 메모리 즉시 해제
                 if not _valid:
                     return None
                 _result = {
@@ -1393,13 +1402,13 @@ def render_tab_mcp_fragment():
         with _col_sp:
             _fig_sp = _build_chart(st.session_state.mcp_chart_sp, "S&P 500  (^GSPC)", "#2196F3", _sp_events)
             if _fig_sp:
-                st.plotly_chart(_fig_sp, use_container_width=True)
+                st.plotly_chart(_fig_sp, width="stretch")
             else:
                 st.caption("S&P 500 데이터 없음 (장 마감 또는 로딩 중)")
         with _col_nq:
             _fig_nq = _build_chart(st.session_state.mcp_chart_nq, "NQ Futures  (NQ=F)", "#FF9800", _nq_events)
             if _fig_nq:
-                st.plotly_chart(_fig_nq, use_container_width=True)
+                st.plotly_chart(_fig_nq, width="stretch")
             else:
                 st.caption("NQ Futures 데이터 없음 (장 마감 또는 로딩 중)")
 

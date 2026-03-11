@@ -427,8 +427,22 @@ def fetch_alpha_vantage_news(sector_name, start_idx, sort="RELEVANCE", use_ticke
         "statnews", "nature.com", "pbs",
     ]
     
+    # 🗑️ 찌라시 섹션 표시 (밈/바이럴성 - 구독자 많고 사람들이 참조함)
     ALPHA_TABLOID_PUBLISHERS = [
-        "fool", "motley fool", "benzinga", "zacks", "seeking alpha", "seekingalpha", "zerohedge"
+        "fool", "motley fool", "benzinga", "zacks", "seeking alpha", "seekingalpha",
+        "zerohedge", "247wallst", "valuewalk", "marketbeat", "tipranks",
+    ]
+
+    # 🚫 완전 폐기 (PR 배포 서비스 / 크립토 타블로이드 / 순수 클릭베이트)
+    ALPHA_DISCARD_PUBLISHERS = [
+        # PR 배포 서비스 (기업 자체 보도자료 - 저널리즘 아님)
+        "globenewswire", "prnewswire", "businesswire", "accesswire", "einpresswire",
+        # 크립토 타블로이드
+        "newsbtc", "bitcoinist", "ambcrypto", "dailyhodl", "beincrypto",
+        "cryptopotato", "u.today", "coingape", "cryptonews", "cryptoslate",
+        # 저품질 금융 블로그 / 클릭베이트
+        "stocknews", "financhill", "finbold", "schaeffersresearch",
+        "pulse2", "simplywallst",
     ]
 
     news_map = {}
@@ -448,28 +462,27 @@ def fetch_alpha_vantage_news(sector_name, start_idx, sort="RELEVANCE", use_ticke
             for item in feed:
                 source_domain = item.get("source_domain", "External").lower()
                 
-                # 출처 검사 로직
-                is_premium = any(p in source_domain for p in ALPHA_PREMIUM_PUBLISHERS)
+                # 3단계 라우팅
+                is_discard = any(t in source_domain for t in ALPHA_DISCARD_PUBLISHERS)
+                if is_discard:
+                    continue  # 완전 폐기
+
                 is_tabloid = any(t in source_domain for t in ALPHA_TABLOID_PUBLISHERS)
-                
-                # 둘 다 해당하지 않는 잡다한 매체는 아예 버림
-                if not is_premium and not is_tabloid:
-                    continue
 
                 sentiment = item.get("overall_sentiment_label", "Neutral")
                 clean_title = f"[{sentiment}] {sanitize_text(item.get('title', ''))} [{item.get('source_domain', 'External')}]"
                 n_id = f"A{idx}"
-                
+
                 news_map[n_id] = {
-                    "url": item.get('url', ''), 
-                    "title": clean_title, 
+                    "url": item.get('url', ''),
+                    "title": clean_title,
                     "snippet": sanitize_text(item.get('summary', ''))
                 }
-                
-                # 투 트랙 라우팅
+
+                # 찌라시 vs 일반 통과
                 if is_tabloid:
                     tabloid_list.append({"id": n_id, "title": clean_title})
-                else: # is_premium
+                else:
                     context_list.append(f"[ID:{n_id}] {clean_title}")
                 
                 idx += 1
@@ -838,9 +851,9 @@ def render_tab_alpha_fragment(target_keywords, user_interest, default_keywords):
                 ui_status_text.markdown(f"🧠 [{sector_name}] AI 엘리트 필터링 및 **한국어 번역 중...**")
                 curated_list = apply_prism_lens_single(sector_name, raw_context, user_interest, search_query)
 
-                # 5개 미만이면 LATEST 정렬로 2차 호출 후 합산 재필터링
-                if len(curated_list) < 5:
-                    ui_status_text.markdown(f"🔄 [{sector_name}] 뉴스 부족 ({len(curated_list)}개) → 추가 수집 중...")
+                # 3개 미만이면 티커 기반 2차 호출 후 합산 재필터링
+                if len(curated_list) < 3:
+                    ui_status_text.markdown(f"🔄 [{sector_name}] 뉴스 부족 ({len(curated_list)}개/3개 미만) → 티커 기반 추가 수집 중...")
                     raw_context2, local_map2, local_tabloid2, alpha_idx, api_limit_hit2 = fetch_alpha_vantage_news(sector_name, alpha_idx, sort="RELEVANCE", use_tickers=True)
                     if api_limit_hit2:
                         timer_placeholder.empty()
@@ -1049,6 +1062,9 @@ def render_tab_mcp_fragment():
         ('mcp_insider', {}), ('mcp_transcript', {}), ('mcp_ticker_names', {}),
         ('mcp_brief', {}), ('mcp_tr_candidates', None), ('mcp_tr_query', ''),
         ('mcp_cal_selected', None), ('mcp_cal_data', {}),
+        ('mcp_watchlist', None),
+        ('mcp_chart_sp', None), ('mcp_chart_nq', None),
+        ('mcp_timeline', ''), ('mcp_events', []), ('mcp_news_raw', ''),
     ]:
         if _k not in st.session_state:
             st.session_state[_k] = _v
@@ -1087,8 +1103,76 @@ def render_tab_mcp_fragment():
         (_time.time() - st.session_state.mcp_last_loaded) > CACHE_TTL
     )
     if needs_load:
-        with st.spinner("📡 Alpha Vantage 데이터 로딩 중... (잠시만 기다려 주세요)"):
-            st.session_state.mcp_gainers      = av_get({"function": "TOP_GAINERS_LOSERS"})
+        with st.spinner("📡 마켓 데이터 로딩 중... (잠시만 기다려 주세요)"):
+            # ── S&P 500 HIGHLIGHTS: yfinance 배치 → 4개 리스트 계산 ──
+            def _fetch_sp500_highlights():
+                _sp500_raw = list(get_sp500_tickers())
+                if not _sp500_raw:
+                    return None
+                # 점(.) → 하이픈(-) 변환 (BRK.B→BRK-B, BF.B→BF-B)
+                _ticker_map = {tk.replace('.', '-'): tk for tk in _sp500_raw}
+                _sp500 = list(_ticker_map.keys())
+                # 100개씩 청크 분할 다운로드 (메모리 절약)
+                _CHUNK = 100
+                _valid = []
+                for _i in range(0, len(_sp500), _CHUNK):
+                    _chunk = _sp500[_i:_i + _CHUNK]
+                    try:
+                        _raw = yf.download(
+                            _chunk, period="5d", interval="1d",
+                            group_by="ticker", threads=False,
+                            progress=False, auto_adjust=True
+                        )
+                    except Exception as _e:
+                        print(f"[Error] chunk {_i} download 실패: {_e}")
+                        continue
+                    for _tk in _chunk:
+                        try:
+                            _closes = _raw[_tk]["Close"].dropna()
+                            _vols   = _raw[_tk]["Volume"].dropna()
+                            if len(_closes) < 2:
+                                continue
+                            _last = float(_closes.iloc[-1])
+                            _prev = float(_closes.iloc[-2])
+                            _vol  = int(_vols.iloc[-1]) if len(_vols) > 0 else 0
+                            _pct  = (_last - _prev) / _prev * 100 if _prev else 0
+                            _amt  = _last * _vol
+                            _orig_tk = _ticker_map.get(_tk, _tk)
+                            _valid.append({
+                                "ticker": _orig_tk,
+                                "price":  _last,
+                                "volume": _vol,
+                                "amount": _amt,
+                                "pct":    _pct,
+                                "chg":    _last - _prev,
+                            })
+                        except Exception:
+                            pass
+                    del _raw  # 메모리 즉시 해제
+                if not _valid:
+                    return None
+                _result = {
+                    "gainers":   sorted(_valid, key=lambda x: x["pct"],    reverse=True)[:5],
+                    "losers":    sorted(_valid, key=lambda x: x["pct"])[:5],
+                    "by_amount": sorted(_valid, key=lambda x: x["amount"], reverse=True)[:5],
+                    "by_volume": sorted(_valid, key=lambda x: x["volume"], reverse=True)[:5],
+                }
+                # 상위 종목 1일 intraday (5분봉) 수집
+                _top_tks = list({item["ticker"] for lst in _result.values() for item in lst})
+                _intra = {}
+                for _tk2 in _top_tks:
+                    try:
+                        _id = yf.Ticker(_tk2).history(period="1d", interval="5m")
+                        _intra[_tk2] = _id["Close"].dropna().tolist()
+                    except Exception:
+                        _intra[_tk2] = []
+                for lst in _result.values():
+                    for item in lst:
+                        item["closes_1d"] = _intra.get(item["ticker"], [])
+                return _result
+
+            st.session_state.mcp_gainers = _fetch_sp500_highlights()
+
             def _fred_csv(series_id):
                 """FRED 공개 CSV 데이터 (API 키 불필요)"""
                 try:
@@ -1150,8 +1234,8 @@ def render_tab_mcp_fragment():
             _raw = st.session_state.mcp_gainers or {}
             _all_tickers = list({
                 item['ticker']
-                for _lst in ['top_gainers', 'top_losers', 'most_actively_traded']
-                for item in _raw.get(_lst, [])[:10]
+                for _lst in ['gainers', 'losers', 'by_amount', 'by_volume']
+                for item in _raw.get(_lst, [])
             })
             _unknown = [t for t in _all_tickers if t not in st.session_state.mcp_ticker_names]
             if _unknown:
@@ -1171,6 +1255,43 @@ def render_tab_mcp_fragment():
                 for t in _unknown:
                     st.session_state.mcp_ticker_names.setdefault(t, t)
 
+            # ── 관심종목 워치리스트 수집 ──
+            _WATCHLIST = [
+                ("VIX",     "^VIX",  "CBOE 변동성 지수"),
+                ("CLmain",  "CL=F",  "WTI 원유 선물"),
+                ("KORU",    "KORU",  "Direxion 한국 불 3X ETF"),
+                ("EWY",     "EWY",   "iShares MSCI 한국 ETF"),
+                ("LABU",    "LABU",  "Direxion S&P 바이오텍 3X ETF"),
+                ("USDKRW",  "KRW=X", "달러/원 환율"),
+                ("IBBQ",    "IBBQ",  "Invesco 나스닥 바이오 ETF"),
+                ("SOX",     "^SOX",  "필라델피아 반도체 지수"),
+                ("SOXX",    "SOXX",  "iShares 반도체 ETF"),
+                ("SOXL",    "SOXL",  "Direxion 반도체 3X ETF"),
+            ]
+            _wl_rows = []
+            for _sym, _tk, _nm in _WATCHLIST:
+                try:
+                    _th    = yf.Ticker(_tk).history(period="1mo")
+                    _th_1d = yf.Ticker(_tk).history(period="1d", interval="5m")
+                    if _th.empty:
+                        continue
+                    _closes    = _th['Close'].dropna().tolist()
+                    _closes_1d = _th_1d['Close'].dropna().tolist() if not _th_1d.empty else []
+                    _last   = _closes[-1]
+                    _prev   = _closes[-2] if len(_closes) >= 2 else _last
+                    _chg    = _last - _prev
+                    _pct    = _chg / _prev * 100 if _prev else 0
+                    _wl_rows.append({"symbol": _sym, "name": _nm,
+                                     "closes": _closes, "closes_1d": _closes_1d,
+                                     "last": _last, "change": _chg, "pct": _pct})
+                except Exception:
+                    pass
+            st.session_state.mcp_watchlist = _wl_rows
+
+            # ── 24h 차트 데이터 ──
+            st.session_state.mcp_chart_sp = yf.Ticker("^GSPC").history(period="1d", interval="5m")
+            st.session_state.mcp_chart_nq = yf.Ticker("NQ=F").history(period="1d", interval="5m")
+
             st.session_state.mcp_last_loaded  = _time.time()
 
     # ── 헤더 ──
@@ -1179,80 +1300,385 @@ def render_tab_mcp_fragment():
     st.caption(f"🕐 마지막 업데이트: {last_dt.strftime('%Y-%m-%d %H:%M')} KST  ·  5분마다 자동 갱신")
     st.write("---")
 
-    # ── 섹션 1: TOP GAINERS / LOSERS / MOST ACTIVE ────────────
-    st.markdown("#### 📊 TOP GAINERS / LOSERS / MOST ACTIVE")
-    data = st.session_state.mcp_gainers or {}
-    if "Information" in data:
-        st.warning(data["Information"])
-    elif "error" in data:
-        st.error(data["error"])
+    # ── 섹션 0-A: S&P500 · NQ 24h 차트 ───────────────────────
+    try:
+        import plotly.graph_objects as go
+        _plotly_ok = True
+    except ImportError:
+        _plotly_ok = False
+
+    def _get_events_with_global_idx(hist):
+        """전역 인덱스 유지하며 차트 범위 내 이벤트 추출 → [(global_idx, naive_dt, desc), ...]"""
+        if hist is None or hist.empty or not st.session_state.mcp_events:
+            return []
+        _et = pytz.timezone('America/New_York')
+        _idx_tz = hist.index.tz_convert(_et) if hist.index.tzinfo else hist.index.tz_localize('UTC').tz_convert(_et)
+        _mn = _idx_tz.tz_localize(None).min().to_pydatetime()
+        _mx = _idx_tz.tz_localize(None).max().to_pydatetime()
+        _result = []
+        for _gi, _evt in enumerate(st.session_state.mcp_events):
+            _dt   = _evt[0]
+            _desc = _evt[1]
+            _det  = _evt[2] if len(_evt) > 2 else ''
+            _eet  = _dt.astimezone(_et) if _dt.tzinfo else _et.localize(_dt)
+            _en   = _eet.replace(tzinfo=None)
+            if _mn <= _en <= _mx:
+                _result.append((_gi, _en, _desc, _det))
+        return _result
+
+    def _build_chart(hist, title, color, events_in_range):
+        """events_in_range: [(global_idx, naive_dt, title, detail), ...]"""
+        if hist is None or hist.empty:
+            return None
+        try:
+            _et  = pytz.timezone('America/New_York')
+            _idx_tz = hist.index.tz_convert(_et) if hist.index.tzinfo else hist.index.tz_localize('UTC').tz_convert(_et)
+            _idx = _idx_tz.tz_localize(None)
+            _cls = hist['Close'].tolist()
+            fig  = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=_idx, y=_cls, mode='lines',
+                line=dict(color=color, width=1.5),
+                hovertemplate='%{x|%H:%M} ET<br><b>%{y:,.2f}</b><extra></extra>',
+                showlegend=False,
+            ))
+            if events_in_range:
+                _y_top = max(_cls)
+                _y_bot = min(_cls)
+                _marker_y = _y_top + (_y_top - _y_bot) * 0.03
+                _mxs, _mdescs = [], []
+                for _evt_item in events_in_range:
+                    _gi, _en, _desc = _evt_item[0], _evt_item[1], _evt_item[2]
+                    _det = _evt_item[3] if len(_evt_item) > 3 else ''
+                    _lbl = str(_gi + 1)
+                    _xs = _en.strftime('%Y-%m-%d %H:%M:%S')
+                    _mxs.append(_xs)
+                    _mdescs.append(f"<b>{_lbl}</b>  {_en.strftime('%H:%M')} ET<br>{_desc}")
+                    fig.add_shape(
+                        type='line', x0=_xs, x1=_xs, y0=0, y1=1, yref='paper',
+                        line=dict(color='#E53935', width=1, dash='dot'),
+                    )
+                    fig.add_annotation(
+                        x=_xs, y=1.0, yref='paper',
+                        text=f"<b>{_lbl}</b>",
+                        showarrow=False,
+                        font=dict(size=11, color='white'),
+                        bgcolor='#E53935',
+                        borderpad=3,
+                        xanchor='center',
+                        yanchor='bottom',
+                    )
+                fig.add_trace(go.Scatter(
+                    x=_mxs, y=[_marker_y] * len(_mxs),
+                    mode='markers',
+                    marker=dict(symbol='square', size=20, color='rgba(0,0,0,0)'),
+                    hovertemplate='%{customdata}<extra></extra>',
+                    customdata=_mdescs,
+                    showlegend=False,
+                ))
+            fig.update_layout(
+                title=dict(text=title, font=dict(size=14)),
+                height=380,
+                margin=dict(l=55, r=15, t=40, b=40),
+                xaxis=dict(tickformat='%H:%M', showgrid=True, gridcolor='#333', title='시간 (ET)'),
+                yaxis=dict(showgrid=True, gridcolor='#333', tickformat=',.0f', title='포인트', autorange=True),
+                hovermode='x unified',
+                template='plotly_dark',
+                showlegend=False,
+            )
+            return fig
+        except Exception as _e:
+            print(f"[Error] 차트 생성 실패: {_e}")
+            return None
+
+    _sp_events = _get_events_with_global_idx(st.session_state.get('mcp_chart_sp'))
+    _nq_events = _get_events_with_global_idx(st.session_state.get('mcp_chart_nq'))
+
+    st.markdown("#### 📊 S&P 500 · NQ Futures — 24h 차트")
+    _col_sp, _col_nq = st.columns(2)
+    if not _plotly_ok:
+        st.warning("plotly 라이브러리가 필요합니다. requirements.txt를 확인해주세요.")
     else:
-        _names  = st.session_state.get('mcp_ticker_names', {})
+        with _col_sp:
+            _fig_sp = _build_chart(st.session_state.mcp_chart_sp, "S&P 500  (^GSPC)", "#2196F3", _sp_events)
+            if _fig_sp:
+                st.plotly_chart(_fig_sp, width="stretch")
+            else:
+                st.caption("S&P 500 데이터 없음 (장 마감 또는 로딩 중)")
+        with _col_nq:
+            _fig_nq = _build_chart(st.session_state.mcp_chart_nq, "NQ Futures  (NQ=F)", "#FF9800", _nq_events)
+            if _fig_nq:
+                st.plotly_chart(_fig_nq, width="stretch")
+            else:
+                st.caption("NQ Futures 데이터 없음 (장 마감 또는 로딩 중)")
 
-        def _fmt_vol(v):
-            try:
-                v = int(v)
-                return f"{v/1e6:.1f}M" if v >= 1e6 else f"{v/1e3:.0f}K"
-            except Exception:
-                return str(v)
+    # 차트 아래 통합 범례 (SP+NQ 합집합, 전역 번호 기준 정렬)
+    _all_shown = {}
+    for _item in (_sp_events + _nq_events):
+        _gi = _item[0]
+        if _gi not in _all_shown:
+            _all_shown[_gi] = _item
+    if _all_shown:
+        _legend_rows = ''
+        for _gi, _item in sorted(_all_shown.items()):
+            _en   = _item[1]
+            _desc = _item[2]
+            _det  = _item[3] if len(_item) > 3 else ''
+            _legend_rows += (
+                f"<div style='margin-bottom:6px'>"
+                f"<span style='display:inline-block;background:#E53935;color:#fff;font-weight:bold;"
+                f"font-size:11px;padding:1px 6px;border-radius:3px;margin-right:6px'>{_gi + 1}</span>"
+                f"<b style='color:#000;font-size:13px'>{_en.strftime('%H:%M')} &nbsp;{_desc}</b>"
+                + (f"<div style='margin-left:36px;color:#444;font-size:12px;margin-top:1px'>{_det}</div>" if _det else "")
+                + "</div>"
+            )
+        st.markdown(f"<div style='padding:4px 0'>{_legend_rows}</div>", unsafe_allow_html=True)
 
-        def _render_items(items, limit=10, sec=""):
-            shown = 0
-            for item in items:
-                ticker = item['ticker']
+    # ── 섹션 0-B: 시황 뉴스 타임라인 분석 ────────────────────
+    st.markdown("#### 📋 시황 뉴스 타임라인 분석")
+    _news_input = st.text_area(
+        "Yahoo Finance 등 시황 뉴스를 붙여넣으세요",
+        value=st.session_state.mcp_news_raw,
+        height=180,
+        placeholder="뉴스 본문을 여기에 붙여넣은 후 아래 버튼을 클릭하세요...",
+        label_visibility="collapsed"
+    )
+    _btn_col1, _btn_col2 = st.columns([3, 1])
+    with _btn_col1:
+        _do_gemini = st.button("🧠 Gemini 타임라인 요약", use_container_width=True, key="mcp_timeline_btn")
+    with _btn_col2:
+        st.button("📊 차트 반영", use_container_width=True, key="mcp_chart_apply_btn")
+    if _do_gemini:
+        if _news_input.strip():
+            st.session_state.mcp_news_raw = _news_input
+            with st.spinner("Gemini가 타임라인을 분석 중입니다..."):
+                _now_et  = datetime.now(pytz.timezone('America/New_York'))
+                _now_utc = datetime.now(pytz.utc)
+                _now_kst = datetime.now(pytz.timezone('Asia/Seoul'))
+                _tl_prompt = f"""당신은 미국 금융시장 전문 애널리스트입니다.
+아래는 미국 증시 시황과 관련된 뉴스 텍스트입니다. 이 내용을 분석하여 타임라인 형식으로 정리하세요.
+
+[★ 현재 기준 시각 (요약 실행 시점) ★]
+- ET (미국 동부): {_now_et.strftime('%Y-%m-%d %H:%M')}
+- UTC: {_now_utc.strftime('%Y-%m-%d %H:%M')}
+- KST (한국): {_now_kst.strftime('%Y-%m-%d %H:%M')}
+
+[★ 상대 시간 변환 규칙 ★]
+- "Today at HH:MM GMT+9" → KST 기준으로 계산 후 ET로 변환 (KST = ET + 14시간)
+- "X hours ago" → 현재 ET 시각에서 X시간 빼서 계산
+- "X minutes ago" → 현재 ET 시각에서 X분 빼서 계산
+- 날짜 없이 시각만 있는 경우 → 오늘 날짜로 간주
+- 위 계산으로 ET 시각을 반드시 산출할 것
+
+[★ 출력 형식 — 반드시 준수 ★]
+[HH:MM] 이벤트 제목 (한 줄, 핵심만)
+- 핵심: 수치·통계·데이터 중심 요약 (2~3문장)
+- 발언: "인물명: 인용문" (있는 경우에만 작성)
+- 시장 반응: S&P500·나스닥 즉각 반응 (파악 가능한 경우에만 작성)
+
+[작성 원칙]
+1. 반드시 [HH:MM] 형식 ET 타임스탬프로 시작 — 명시된 시간 우선, 상대시간은 위 규칙으로 변환
+2. %, 달러($), 베이시스포인트(bp), 고용자수(만명) 등 모든 수치 반드시 포함
+3. 우선순위: 연준·FOMC 발언 > CPI·NFP·PCE 등 경제지표 > 기업 실적·이슈 > 지정학
+4. 시간 오름차순 정렬 (가장 오래된 이벤트 → 최신 순)
+5. 광고, 구독 유도, 무관 컨텐츠 완전 제외
+6. 전체 한국어로 작성
+
+[원본 뉴스]
+{_news_input}"""
                 try:
-                    price_val = float(item.get('price', 0))
-                    vol_val   = int(item.get('volume', 0))
-                except Exception:
-                    continue
-                if price_val < 2.0 or vol_val < 50000:
-                    continue
-                name  = _names.get(ticker, ticker)
-                pct   = item.get("change_percentage", "")
-                vol   = _fmt_vol(vol_val)
-                label = name if name != ticker else ticker
-                # 종목 정보 + 기업 개요 버튼
-                c_info, c_btn = st.columns([5, 2])
-                with c_info:
-                    st.markdown(f"**{label}**  \n`{ticker}` · ${price_val:.2f} · `{pct}` · {vol}")
-                with c_btn:
-                    if st.button("📋 기업 개요", key=f"brief_{sec}_{ticker}", use_container_width=True):
-                        if ticker not in st.session_state.mcp_brief:
-                            with st.spinner(f"{ticker} 기업 개요 생성 중..."):
-                                _prompt = f"""미국 상장 기업 {ticker} ({label})에 대해 한국어로 간결하게 브리핑해줘.
-아래 항목을 포함해서 5~7문장으로 작성해:
-- 주요 사업 및 핵심 제품/서비스
-- 시장 포지션 및 주요 경쟁사
-- 최근 이슈 또는 성장 동력
-- 투자 관점에서의 특징 (성장주/가치주/배당주 등)"""
-                                try:
-                                    _resp = client.models.generate_content(model="gemini-2.0-flash", contents=_prompt)
-                                    st.session_state.mcp_brief[ticker] = _resp.text
-                                except Exception as _e:
-                                    st.session_state.mcp_brief[ticker] = f"기업 개요 생성 실패: {_e}"
-                # 캐싱된 기업 개요 표시
-                if ticker in st.session_state.mcp_brief:
-                    with st.expander(f"📄 {label} 기업 개요", expanded=True):
-                        st.write(st.session_state.mcp_brief[ticker])
-                shown += 1
-                if shown >= limit:
-                    break
-            if shown == 0:
-                st.caption("조건에 맞는 종목 없음")
+                    _tl_resp = client.models.generate_content(model='gemini-2.5-flash', contents=_tl_prompt)
+                    _tl_text = _tl_resp.text
+                    st.session_state.mcp_timeline = _tl_text
+                    # 이벤트 파싱 → [HH:MM] 또는 [YYYY-MM-DD HH:MM] 추출
+                    _et_tz   = pytz.timezone('America/New_York')
+                    _today   = datetime.now(_et_tz)
+                    # 차트 데이터 시간 범위 계산 (SP500 기준, 없으면 오늘 사용)
+                    _chart_min = None
+                    _chart_max = None
+                    _sp_data = st.session_state.get('mcp_chart_sp')
+                    if _sp_data is not None and not _sp_data.empty:
+                        _cidx = _sp_data.index.tz_convert(_et_tz) if _sp_data.index.tzinfo else _sp_data.index.tz_localize('UTC').tz_convert(_et_tz)
+                        _chart_min = _cidx.min()
+                        _chart_max = _cidx.max()
+                    # 이벤트 블록 분리: [HH:MM] 타임스탬프 기준으로 split
+                    _evt_pattern = r'\[(?:(?:\d{4})-(?:\d{2})-(?:\d{2})\s+)?\d{1,2}:\d{2}\]'
+                    _splits = re.split(f'({_evt_pattern})', _tl_text)
+                    # _splits: ['앞텍스트', '[09:41]', '제목\n- 핵심:...', '[10:30]', '제목\n...', ...]
+                    _evts = []
+                    _i = 1
+                    while _i < len(_splits) - 1:
+                        _ts_str  = _splits[_i]        # '[09:41]' 또는 '[2026-03-11 09:41]'
+                        _content = _splits[_i + 1] if _i + 1 < len(_splits) else ''
+                        _i += 2
+                        try:
+                            _tm = re.match(r'\[(?:(\d{4})-(\d{2})-(\d{2})\s+)?(\d{1,2}):(\d{2})\]', _ts_str)
+                            if not _tm:
+                                continue
+                            _yr, _mo, _dy = _tm.group(1), _tm.group(2), _tm.group(3)
+                            _h, _mi = int(_tm.group(4)), int(_tm.group(5))
+                            # 제목: content 첫 줄
+                            _lines = _content.strip().splitlines()
+                            _title = _lines[0].strip() if _lines else ''
+                            # 상세: 이후 줄에서 핵심/발언/시장반응 추출
+                            _detail_lines = []
+                            for _ln in _lines[1:]:
+                                _ln = _ln.strip()
+                                if _ln.startswith('- ') or _ln.startswith('* '):
+                                    _detail_lines.append(_ln[2:].strip())
+                                elif _ln:
+                                    _detail_lines.append(_ln)
+                            _detail = ' / '.join(_detail_lines) if _detail_lines else ''
+                            if _yr:
+                                _dt_evt = _et_tz.localize(datetime(int(_yr), int(_mo), int(_dy), _h, _mi, 0))
+                            else:
+                                _base = _chart_min.date() if _chart_min else _today.date()
+                                _dt_evt = _et_tz.localize(datetime(_base.year, _base.month, _base.day, _h, _mi, 0))
+                            _evts.append((_dt_evt, _title, _detail))
+                        except Exception:
+                            pass
+                    st.session_state.mcp_events = _evts
+                except Exception as _te:
+                    st.error(f"Gemini 요약 실패: {_te}")
+        else:
+            st.warning("뉴스 텍스트를 먼저 붙여넣어 주세요.")
 
-        col_g, col_l, col_a = st.columns(3)
+    if st.session_state.mcp_timeline:
+        with st.expander("📊 타임라인 요약 보기", expanded=True):
+            st.markdown(st.session_state.mcp_timeline)
+        if st.session_state.mcp_events:
+            st.caption(f"✅ {len(st.session_state.mcp_events)}개 이벤트 파싱 완료 → 📊 차트 반영 버튼을 눌러 적용하세요")
+    st.write("---")
+
+    # ── 섹션 0: 관심종목 워치리스트 ───────────────────────────
+    st.markdown("#### 👁️ 관심종목 워치리스트")
+
+    def _make_sparkline(closes, width=90, height=32):
+        if not closes or len(closes) < 2:
+            return ""
+        mn, mx = min(closes), max(closes)
+        rng = mx - mn or 1
+        pts = []
+        for i, p in enumerate(closes):
+            x = i / (len(closes) - 1) * width
+            y = height - (p - mn) / rng * (height - 4) - 2
+            pts.append(f"{x:.1f},{y:.1f}")
+        color = "#ef5350" if closes[-1] >= closes[0] else "#26a69a"
+        return (
+            f'<svg width="{width}" height="{height}" style="vertical-align:middle;display:block;">'
+            f'<polyline points="{" ".join(pts)}" fill="none" stroke="{color}" stroke-width="1.5" stroke-linejoin="round"/>'
+            f'</svg>'
+        )
+
+    _wl = st.session_state.mcp_watchlist or []
+    if _wl:
+        _rows_html = ""
+        for _r in _wl:
+            _up   = _r["pct"] >= 0
+            _clr  = "#ef5350" if _up else "#26a69a"
+            _sign = "+" if _up else ""
+            _spark_1mo = _make_sparkline(_r["closes"])
+            _spark_1d  = _make_sparkline(_r.get("closes_1d", []), width=70)
+            _last_str = f"{_r['last']:,.2f}"
+            _chg_str  = f"{_sign}{_r['change']:,.2f}"
+            _pct_str  = f"{_sign}{_r['pct']:.2f}%"
+            _rows_html += f"""
+            <tr>
+                <td class="wl-sym">{_r['symbol']}</td>
+                <td class="wl-name">{_r['name']}</td>
+                <td class="wl-spark">{_spark_1mo}</td>
+                <td class="wl-spark">{_spark_1d if _spark_1d else '<span style="color:#555;font-size:11px">장 마감</span>'}</td>
+                <td class="wl-num">{_last_str}</td>
+                <td class="wl-num" style="color:{_clr}">{_chg_str}</td>
+                <td class="wl-num" style="color:{_clr}"><b>{_pct_str}</b></td>
+            </tr>"""
+
+        st.markdown(f"""
+        <style>
+            .wl-wrap {{ overflow-x:auto; }}
+            .wl-tbl {{ width:100%; border-collapse:collapse; font-family:'Segoe UI',sans-serif; font-size:13px; }}
+            .wl-tbl th {{ color:#888; font-weight:500; padding:7px 12px; border-bottom:1px solid #333;
+                          text-align:left; white-space:nowrap; }}
+            .wl-tbl th.wl-r {{ text-align:right; }}
+            .wl-tbl td {{ padding:6px 12px; border-bottom:1px solid #1e1e1e; vertical-align:middle; }}
+            .wl-sym  {{ font-weight:700; font-size:13px; white-space:nowrap; }}
+            .wl-name {{ color:#999; font-size:12px; white-space:nowrap; }}
+            .wl-spark {{ padding:4px 12px; }}
+            .wl-num  {{ text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; font-size:13px; }}
+        </style>
+        <div class="wl-wrap">
+        <table class="wl-tbl">
+            <thead>
+                <tr>
+                    <th>Symbol</th>
+                    <th>Name</th>
+                    <th>1달 추이</th>
+                    <th>1일 추이</th>
+                    <th class="wl-r">Last</th>
+                    <th class="wl-r">Change</th>
+                    <th class="wl-r">% Change ↕</th>
+                </tr>
+            </thead>
+            <tbody>{_rows_html}</tbody>
+        </table>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.caption("워치리스트 데이터를 불러오는 중...")
+    st.write("---")
+
+    # ── 섹션 1: S&P 500 HIGHLIGHTS ────────────────────────────
+    st.markdown("#### 🏆 S&P 500 HIGHLIGHTS")
+    hl = st.session_state.mcp_gainers
+    if not hl:
+        st.caption("⏳ 데이터 로딩 중이거나 장 마감 상태입니다.")
+    else:
+        _names = st.session_state.get('mcp_ticker_names', {})
+
+        def _hl_item(item, sec, metric="pct"):
+            tk    = item["ticker"]
+            nm    = _names.get(tk, "")
+            name  = nm if nm and nm != tk else tk   # 종목명 없으면 티커로 대체
+            pct   = item["pct"]
+            clr   = "#ef5350" if pct >= 0 else "#26a69a"
+            sign  = "+" if pct >= 0 else ""
+            vol   = item["volume"]
+            amt   = item["amount"]
+            vol_s = f"{vol/1e6:.1f}M" if vol >= 1e6 else f"{vol/1e3:.0f}K"
+            amt_s = f"${amt/1e9:.1f}B" if amt >= 1e9 else f"${amt/1e6:.0f}M"
+            sub   = amt_s if metric == "amount" else vol_s
+            sub_label = "거래대금" if metric == "amount" else "거래량"
+
+            c_text, c_spark = st.columns([3, 1])
+            with c_text:
+                st.markdown(
+                    f"**{name}** `{tk}`  \n"
+                    f"${item['price']:,.2f} · **{sign}{pct:.2f}%**  \n"
+                    f"*{sub_label}: {sub}*"
+                )
+            with c_spark:
+                _sp = _make_sparkline(item.get("closes_1d", []), width=80, height=30)
+                if _sp:
+                    st.markdown(_sp, unsafe_allow_html=True)
+            st.write("")
+
+        col_g, col_l, col_a, col_v = st.columns(4)
         with col_g:
-            st.markdown("**🟢 Top Gainers**")
-            st.caption("NYSE·Nasdaq·NYSE American / ≥$2 / ≥50K vol")
-            _render_items(data.get("top_gainers", []), sec="g")
+            st.markdown("**🚀 Top 5 Gainers**")
+            for _it in hl.get("gainers", []):
+                _hl_item(_it, sec="g")
         with col_l:
-            st.markdown("**🔴 Top Losers**")
-            st.caption("NYSE·Nasdaq·NYSE American / ≥$2 / ≥50K vol")
-            _render_items(data.get("top_losers", []), sec="l")
+            st.markdown("**📉 Top 5 Losers**")
+            for _it in hl.get("losers", []):
+                _hl_item(_it, sec="l")
         with col_a:
-            st.markdown("**🔵 Most Active**")
-            st.caption("NYSE·Nasdaq·NYSE American / ≥$2 / ≥50K vol")
-            _render_items(data.get("most_actively_traded", []), sec="a")
+            st.markdown("**💰 Most Active (거래대금)**")
+            for _it in hl.get("by_amount", []):
+                _hl_item(_it, sec="a", metric="amount")
+        with col_v:
+            st.markdown("**📊 Most Active (거래량)**")
+            for _it in hl.get("by_volume", []):
+                _hl_item(_it, sec="v", metric="volume")
     st.write("---")
 
     # ── 섹션 2: 거시경제 지표 ──────────────────────────────────
@@ -1869,7 +2295,7 @@ def render_tab_mcp_fragment():
 # 📌 메인 앱 렌더링
 # ==========================================
 def main():
-    st.set_page_config(page_title="News Prism V10.12", page_icon="💎", layout="wide")
+    st.set_page_config(page_title="News Prism V10.39", page_icon="💎", layout="wide")
 
     st.markdown("""
         <style>
@@ -1897,12 +2323,12 @@ def main():
                 f"""
                 <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 10px;">
                     <img src="data:image/png;base64,{data}" style="height: 200px; border-radius: 8px;">
-                    <h1 style="margin: 0; padding: 0; line-height: 1.2;"> 가나디: 신문배달 와써여~~ - V10.3</h1>
+                    <h1 style="margin: 0; padding: 0; line-height: 1.2;">가나디의 신문배달</h1>
                 </div>
                 """, unsafe_allow_html=True
             )
     else:
-        st.title("💎 가나디의 신문배달 - V10.3")
+        st.title("💎 가나디의 신문배달")
         st.info(f"💡 '{LOGO_PATH}' 파일을 찾을 수 없습니다. 이미지를 깃허브에 업로드해 주세요.")
 
     st.markdown("##### 🚀top10 섹션 헤드라인 + 📺유튜브 주요채널들")
@@ -1929,7 +2355,6 @@ def main():
         st.session_state.alpha_data = a_data
     if 'tabloid_results' not in st.session_state.alpha_data:
         st.session_state.alpha_data['tabloid_results'] = []
-        
     if 'yt_data' not in st.session_state: st.session_state.yt_data = y_data
 
     if 'selected_news_id' not in st.session_state: st.session_state.selected_news_id = None
