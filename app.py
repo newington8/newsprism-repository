@@ -1101,6 +1101,7 @@ def render_tab_mcp_fragment():
     CACHE_TTL = 300
     needs_load = (
         st.session_state.mcp_gainers is None or
+        st.session_state.mcp_sector is None or
         (_time.time() - st.session_state.mcp_last_loaded) > CACHE_TTL
     )
     if needs_load:
@@ -1564,11 +1565,6 @@ def render_tab_mcp_fragment():
     # ── 섹션 0-C: 섹터맵 ──────────────────────────────────────
     st.markdown("#### 🗺️ S&P 500 섹터 퍼포먼스")
     _sector_data = st.session_state.get('mcp_sector')
-    # 디버그: 응답 키 구조 확인
-    if _sector_data:
-        st.caption(f"[DEBUG] sector keys: {list(_sector_data.keys())[:5]}")
-    else:
-        st.caption("[DEBUG] mcp_sector is None")
     _SECTOR_KR = {
         "Information Technology":    "IT·기술",
         "Health Care":               "헬스케어",
