@@ -1106,49 +1106,56 @@ def render_tab_mcp_fragment():
         with st.spinner("📡 마켓 데이터 로딩 중... (잠시만 기다려 주세요)"):
             # ── S&P 500 HIGHLIGHTS: yfinance 배치 → 4개 리스트 계산 ──
             def _fetch_sp500_highlights():
-                _sp500_raw = list(get_sp500_tickers())
-                if not _sp500_raw:
-                    return None
-                # 점(.) → 하이픈(-) 변환 (BRK.B→BRK-B, BF.B→BF-B)
-                _ticker_map = {tk.replace('.', '-'): tk for tk in _sp500_raw}
-                _sp500 = list(_ticker_map.keys())
-                # 100개씩 청크 분할 다운로드 (메모리 절약)
-                _CHUNK = 100
+                # 메모리 절약: 대형주 150개 고정 리스트 (S&P500 시총 상위)
+                _SP150 = [
+                    "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK-B","AVGO","JPM",
+                    "LLY","UNH","XOM","V","MA","COST","HD","PG","ORCL","ABBV",
+                    "WMT","CVX","MRK","BAC","NFLX","KO","CRM","AMD","PEP","TMO",
+                    "ACN","LIN","MCD","CSCO","ABT","TXN","DHR","NKE","WFC","PM",
+                    "NEE","INTC","INTU","AMGN","QCOM","RTX","HON","IBM","GE","CAT",
+                    "SPGI","AMAT","NOW","BKNG","GS","MS","UNP","BLK","ISRG","SYK",
+                    "DE","AXP","ELV","ADI","VRTX","GILD","REGN","C","MMC","PLD",
+                    "CB","ZTS","SBUX","AMT","EOG","SLB","CI","MO","CME","SO",
+                    "DUK","BSX","ITW","NOC","MDLZ","GD","MCO","PNC","USB","TGT",
+                    "AON","HCA","MAR","EMR","FCX","APD","SHW","MMM","ECL","EW",
+                    "KLAC","LRCX","SNPS","CDNS","PANW","CRWD","FTNT","MRVL","NXPI","ON",
+                    "ADSK","ANSS","PH","ETN","ADP","PAYX","VRSK","CSGP","IDXX","IQV",
+                    "MTD","A","DXCM","PODD","GEHC","HUM","CVS","MCK","ABC","MOH",
+                    "F","GM","TT","GWW","CARR","OTIS","IR","DOV","XYL","IEX",
+                    "UBER","LYFT","ABNB","DASH","SPOT","PINS","SNAP","RBLX","U","COIN",
+                ]
                 _valid = []
-                for _i in range(0, len(_sp500), _CHUNK):
-                    _chunk = _sp500[_i:_i + _CHUNK]
+                try:
+                    _raw = yf.download(
+                        _SP150, period="2d", interval="1d",
+                        group_by="ticker", threads=False,
+                        progress=False, auto_adjust=True
+                    )
+                except Exception as _e:
+                    print(f"[Error] yfinance download 실패: {_e}")
+                    return None
+                for _tk in _SP150:
                     try:
-                        _raw = yf.download(
-                            _chunk, period="5d", interval="1d",
-                            group_by="ticker", threads=False,
-                            progress=False, auto_adjust=True
-                        )
-                    except Exception as _e:
-                        print(f"[Error] chunk {_i} download 실패: {_e}")
-                        continue
-                    for _tk in _chunk:
-                        try:
-                            _closes = _raw[_tk]["Close"].dropna()
-                            _vols   = _raw[_tk]["Volume"].dropna()
-                            if len(_closes) < 2:
-                                continue
-                            _last = float(_closes.iloc[-1])
-                            _prev = float(_closes.iloc[-2])
-                            _vol  = int(_vols.iloc[-1]) if len(_vols) > 0 else 0
-                            _pct  = (_last - _prev) / _prev * 100 if _prev else 0
-                            _amt  = _last * _vol
-                            _orig_tk = _ticker_map.get(_tk, _tk)
-                            _valid.append({
-                                "ticker": _orig_tk,
-                                "price":  _last,
-                                "volume": _vol,
-                                "amount": _amt,
-                                "pct":    _pct,
-                                "chg":    _last - _prev,
-                            })
-                        except Exception:
-                            pass
-                    del _raw  # 메모리 즉시 해제
+                        _closes = _raw[_tk]["Close"].dropna()
+                        _vols   = _raw[_tk]["Volume"].dropna()
+                        if len(_closes) < 2:
+                            continue
+                        _last = float(_closes.iloc[-1])
+                        _prev = float(_closes.iloc[-2])
+                        _vol  = int(_vols.iloc[-1]) if len(_vols) > 0 else 0
+                        _pct  = (_last - _prev) / _prev * 100 if _prev else 0
+                        _amt  = _last * _vol
+                        _valid.append({
+                            "ticker": _tk,
+                            "price":  _last,
+                            "volume": _vol,
+                            "amount": _amt,
+                            "pct":    _pct,
+                            "chg":    _last - _prev,
+                        })
+                    except Exception:
+                        pass
+                del _raw  # 메모리 즉시 해제
                 if not _valid:
                     return None
                 _result = {
