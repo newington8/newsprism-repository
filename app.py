@@ -1119,16 +1119,16 @@ def render_tab_mcp_fragment():
                     "DUK","BSX","ITW","NOC","MDLZ","GD","MCO","PNC","USB","TGT",
                     "AON","HCA","MAR","EMR","FCX","APD","SHW","MMM","ECL","EW",
                     "KLAC","LRCX","SNPS","CDNS","PANW","CRWD","FTNT","MRVL","NXPI","ON",
-                    "ADSK","ANSS","PH","ETN","ADP","PAYX","VRSK","CSGP","IDXX","IQV",
-                    "MTD","A","DXCM","PODD","GEHC","HUM","CVS","MCK","ABC","MOH",
+                    "ADSK","TEAM","PH","ETN","ADP","PAYX","VRSK","CSGP","IDXX","IQV",
+                    "MTD","A","DXCM","PODD","GEHC","HUM","CVS","MCK","COR","MOH",
                     "F","GM","TT","GWW","CARR","OTIS","IR","DOV","XYL","IEX",
                     "UBER","LYFT","ABNB","DASH","SPOT","PINS","SNAP","RBLX","U","COIN",
                 ]
                 _valid = []
                 try:
                     _raw = yf.download(
-                        _SP150, period="2d", interval="1d",
-                        group_by="ticker", threads=False,
+                        _SP150, period="5d", interval="1d",
+                        group_by="ticker", threads=True,
                         progress=False, auto_adjust=True
                     )
                 except Exception as _e:
