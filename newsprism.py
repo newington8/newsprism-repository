@@ -2244,22 +2244,26 @@ def render_tab_mcp_fragment():
             pass
         return {"status": "not_found", "message": "티커 변환에 실패했습니다."}
 
-    def _fetch_transcript(ticker):
-        """최신 분기 자동 탐지 후 어닝콜 트랜스크립트 AI 요약"""
+    def _detect_quarter(ticker):
+        """최신 분기 정보만 탐지 (quarter, fiscal_date, reported_date)"""
         from datetime import datetime as _dt
         earnings_data = av_get({"function": "EARNINGS", "symbol": ticker})
         quarterly = earnings_data.get("quarterlyEarnings", [])
-        latest_quarter = None
-        if quarterly:
-            date_str = quarterly[0].get("fiscalDateEnding", "")
-            try:
-                d = _dt.strptime(date_str, "%Y-%m-%d")
-                latest_quarter = f"{d.year}Q{(d.month - 1) // 3 + 1}"
-            except Exception:
-                pass
-        if not latest_quarter:
-            st.warning("최신 분기 정보를 가져올 수 없습니다. 티커를 확인해 주세요.")
-            return
+        if not quarterly:
+            return None
+        q0 = quarterly[0]
+        date_str = q0.get("fiscalDateEnding", "")
+        reported_date = q0.get("reportedDate", "")
+        try:
+            d = _dt.strptime(date_str, "%Y-%m-%d")
+            latest_quarter = f"{d.year}Q{(d.month - 1) // 3 + 1}"
+        except Exception:
+            return None
+        return {"quarter": latest_quarter, "fiscal_date": date_str, "reported_date": reported_date}
+
+    def _fetch_transcript(ticker, quarter_info):
+        """어닝콜 트랜스크립트 AI 요약 (분기 정보는 이미 탐지된 것 사용)"""
+        latest_quarter = quarter_info["quarter"]
         result = av_get({"function": "EARNINGS_CALL_TRANSCRIPT", "symbol": ticker, "quarter": latest_quarter})
         cache_key = f"{ticker}_{latest_quarter}"
         if "Information" in result:
@@ -2311,8 +2315,19 @@ def render_tab_mcp_fragment():
             with st.spinner("티커 확인 중..."):
                 resolved = _resolve_ticker(tr_query.strip())
             if resolved["status"] == "found":
-                with st.spinner(f"{resolved['ticker']} 최신 어닝콜 조회 중..."):
-                    _fetch_transcript(resolved["ticker"])
+                _tk = resolved["ticker"]
+                with st.spinner(f"{_tk} 최신 분기 확인 중..."):
+                    _qinfo = _detect_quarter(_tk)
+                if not _qinfo:
+                    st.warning("최신 분기 정보를 가져올 수 없습니다. 티커를 확인해 주세요.")
+                else:
+                    st.info(
+                        f"📅 **{_qinfo['quarter']} 어닝콜**  ·  "
+                        f"회계연도 마감: {_qinfo['fiscal_date']}  ·  "
+                        f"실적 발표일: {_qinfo['reported_date']}"
+                    )
+                    with st.spinner(f"🧠 {_tk} {_qinfo['quarter']} 트랜스크립트 AI 요약 중..."):
+                        _fetch_transcript(_tk, _qinfo)
             elif resolved["status"] == "ambiguous":
                 st.session_state.mcp_tr_candidates = resolved.get("candidates", [])
             else:
@@ -2329,8 +2344,18 @@ def render_tab_mcp_fragment():
         if st.button("✅ 이 종목으로 요약", key="mcp_tr_confirm", use_container_width=False):
             selected_ticker = candidates[sel_idx]["ticker"]
             st.session_state.mcp_tr_candidates = None
-            with st.spinner(f"{selected_ticker} 최신 어닝콜 조회 중..."):
-                _fetch_transcript(selected_ticker)
+            with st.spinner(f"{selected_ticker} 최신 분기 확인 중..."):
+                _qinfo2 = _detect_quarter(selected_ticker)
+            if not _qinfo2:
+                st.warning("최신 분기 정보를 가져올 수 없습니다.")
+            else:
+                st.info(
+                    f"📅 **{_qinfo2['quarter']} 어닝콜**  ·  "
+                    f"회계연도 마감: {_qinfo2['fiscal_date']}  ·  "
+                    f"실적 발표일: {_qinfo2['reported_date']}"
+                )
+                with st.spinner(f"🧠 {selected_ticker} {_qinfo2['quarter']} 트랜스크립트 AI 요약 중..."):
+                    _fetch_transcript(selected_ticker, _qinfo2)
 
     # ── 결과 표시 ──
     if st.session_state.mcp_transcript:
