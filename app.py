@@ -2313,6 +2313,56 @@ def render_tab_mcp_fragment():
     with col_t2:
         tr_btn = st.button("🧠 AI 요약", key="mcp_transcript_btn", use_container_width=True)
 
+    # ── 수동 트랜스크립트 입력 ──
+    with st.expander("✏️ 트랜스크립트 직접 붙여넣기 (선택)", expanded=False):
+        st.caption("인터넷에서 가져온 어닝콜 트랜스크립트를 직접 붙여넣으면 AI 요약에 사용됩니다. 티커와 분기를 위에서 입력하세요.")
+        _manual_text = st.text_area(
+            "트랜스크립트 원문",
+            height=200,
+            placeholder="트랜스크립트 전문을 여기에 붙여넣으세요...",
+            key="mcp_manual_transcript",
+            label_visibility="collapsed",
+        )
+        _manual_quarter = st.text_input(
+            "분기 (예: 2025Q4)",
+            placeholder="예: 2025Q4",
+            key="mcp_manual_quarter",
+        )
+        _manual_btn = st.button("🧠 수동 트랜스크립트 AI 요약", key="mcp_manual_btn", use_container_width=True)
+
+    if _manual_btn:
+        if not tr_query.strip():
+            st.warning("티커를 위 입력창에 먼저 입력해 주세요.")
+        elif not _manual_text.strip():
+            st.warning("트랜스크립트를 붙여넣어 주세요.")
+        else:
+            _man_quarter = _manual_quarter.strip() or "수동입력"
+            _man_ticker  = tr_query.strip().upper()
+            _cache_key   = f"{_man_ticker}_{_man_quarter}_manual"
+            st.info(f"📅 **{_man_quarter} 어닝콜 (수동 입력)**  ·  티커: {_man_ticker}")
+            with st.spinner(f"🧠 {_man_ticker} {_man_quarter} 트랜스크립트 AI 요약 중..."):
+                _man_prompt = f"""다음은 {_man_ticker}의 {_man_quarter} 어닝콜 트랜스크립트입니다.
+한국어로 핵심 내용을 아래 형식으로 요약해 주세요:
+
+1. **실적 요약**: 매출, 순이익, EPS 주요 수치
+2. **경영진 핵심 발언**: CEO/CFO의 중요 발언 3~5가지
+3. **가이던스**: 다음 분기/연간 전망
+4. **주요 리스크**: 경영진이 언급한 위험 요소
+5. **투자 시사점**: 종합적인 투자 관점에서의 시사점
+
+트랜스크립트:
+{_manual_text[:15000]}"""
+                try:
+                    _man_resp = client.models.generate_content(model="gemini-2.0-flash", contents=_man_prompt)
+                    _man_summary = _man_resp.text
+                except Exception as _me:
+                    _man_summary = f"요약 생성 실패: {_me}"
+            st.session_state.mcp_transcript[_cache_key] = {
+                "ticker": _man_ticker, "quarter": _man_quarter,
+                "summary": _man_summary, "raw_preview": _manual_text[:500],
+                "full_text": _manual_text, "searches": {},
+            }
+
     if tr_btn:
         if tr_query:
             st.session_state.mcp_tr_candidates = None
